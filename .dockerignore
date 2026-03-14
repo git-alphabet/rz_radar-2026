@@ -1,5 +1,8 @@
 # .dockerignore — 减小 Docker build context，加速 build
-# 只排除不需要打包进镜像的文件
+# 注意：docker/ 目录故意不排除，因为 Dockerfile 中通过 BuildKit
+#       --mount=type=bind 访问其中的 TRT tar.gz 和 MVS SDK，
+#       需要它在 build context 中。Dockerfile 使用显式 COPY 指令，
+#       docker/ 不会被拷贝进 /workspace。
 
 # Python 缓存
 __pycache__/
@@ -11,6 +14,7 @@ __pycache__/
 .git/
 .gitignore
 .vscode/
+.idea/
 .github/
 
 # 大型本地文件（不进镜像，运行时挂载）
@@ -19,15 +23,17 @@ TensorRT-8.6.0.12/
 images/
 images-2025/
 
-# Conda/venv（容器内自建 conda env）
+# 环境配置（本地密钥/端口配置，不进镜像）
+.env
+.env.example
+
+# Conda/venv
 *.conda
 *.egg-info/
 
-# 顶层 README（非 docker/ 下的）
+# 文档
 README.md
 README.en.md
-
-# docker/README.docker.md 保留在构建上下文中（防止目录为空导致 COPY 失败）
-
-# compose / env 文件在 docker/ 里不需要进 /tmp/mvs_sdk/
-docker/compose*.yml
+CLAUDE.md
+LICENSE
+requirements.txt

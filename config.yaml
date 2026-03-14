@@ -34,7 +34,7 @@ paths:
 
 camera_params:
   exposure_time: 16000.0 # 曝光时间
-  gain: 17.9 # 增益值
+  gain: 10.9 # 增益值
 
 kalman:
   process_noise: 1e-5
