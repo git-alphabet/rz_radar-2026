@@ -10,18 +10,32 @@
 FROM ubuntu:22.04
 
 LABEL org.opencontainers.image.title="RZ-Radar-2025" \
-      org.opencontainers.image.description="RoboMaster Radar Station Vision System" \
-      org.opencontainers.image.licenses="MIT"
+    org.opencontainers.image.description="RoboMaster Radar Station Vision System" \
+    org.opencontainers.image.licenses="MIT"
+
+# ── 保底代理参数 ──
+ARG http_proxy
+ARG https_proxy
+ENV http_proxy=${http_proxy}
+ENV https_proxy=${https_proxy}
 
 # 合并为单条 ENV，减少镜像 layer 数量（每条 ENV 独立生成一层）
 ENV DEBIAN_FRONTEND=noninteractive \
     MVCAM_COMMON_RUNENV=/opt/MVS/lib \
+    LD_LIBRARY_PATH=/opt/MVS/lib:/opt/MVS/lib/x86_64 \
     PATH=/opt/conda/envs/rz_radar-2026/bin:/opt/conda/bin:$PATH
+
+# Docker daemon 会将宿主机的 HTTP_PROXY 全局注入所有 RUN（包含 wget/pip/conda）
+# 保底代理：优先清华镜像，失败自动切换代理（由任务传递代理地址）
+ENV HTTP_PROXY="" \
+    HTTPS_PROXY=""
 
 # ── 换源 + 安装系统依赖（合并为一条 RUN，避免 apt cache 失效问题）
 # apt-get update 与 install 必须在同一 RUN 中，否则缓存旧 index 会导致安装失败
 # 包名按字母序排列（best practice：便于维护和 code review）
-RUN sed -i \
+RUN printf 'Acquire::http::Proxy "DIRECT";\nAcquire::https::Proxy "DIRECT";\n' \
+        > /etc/apt/apt.conf.d/01no-proxy \
+    && sed -i \
         -e 's|http://archive.ubuntu.com|http://mirrors.tuna.tsinghua.edu.cn|g' \
         -e 's|http://security.ubuntu.com|http://mirrors.tuna.tsinghua.edu.cn|g' \
         /etc/apt/sources.list \
@@ -29,27 +43,44 @@ RUN sed -i \
         ca-certificates \
         curl \
         libdbus-1-3 \
+        libegl1 \
+        libfontconfig1 \
         libgl1-mesa-glx \
         libglib2.0-0 \
         libgomp1 \
+        libice6 \
+        libsm6 \
         libusb-1.0-0 \
+        libxcb-cursor0 \
         libxcb-icccm4 \
         libxcb-image0 \
         libxcb-keysyms1 \
         libxcb-randr0 \
         libxcb-render-util0 \
+        libxcb-shape0 \
         libxcb-xfixes0 \
         libxcb-xinerama0 \
         libxkbcommon-x11-0 \
         wget \
     && rm -rf /var/lib/apt/lists/*
 
+# 保底代理逻辑：清华镜像不可用时自动切换代理
+RUN ping -c 1 mirrors.tuna.tsinghua.edu.cn || \
+    export http_proxy=${http_proxy} && export https_proxy=${https_proxy}
+
 # ── Miniforge3 ────────────────────────────────────────────────
-RUN wget -q \
-        https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh \
-        -O /tmp/miniforge.sh \
-    && bash /tmp/miniforge.sh -b -p /opt/conda \
-    && rm /tmp/miniforge.sh
+# 优先用 docker/Miniforge3-Linux-x86_64.sh（宿主机预下载，和 TRT/MVS 同款模式）
+# 文件不存在则从清华 GitHub Release 镜像直接拉取（无需代理）
+RUN --mount=type=bind,source=docker,target=/tmp/build \
+    if [ -f "/tmp/build/Miniforge3-Linux-x86_64.sh" ]; then \
+        bash /tmp/build/Miniforge3-Linux-x86_64.sh -b -p /opt/conda; \
+    else \
+        wget -q --no-proxy \
+            https://mirrors.tuna.tsinghua.edu.cn/github-release/conda-forge/miniforge/LatestRelease/Miniforge3-Linux-x86_64.sh \
+            -O /tmp/miniforge.sh \
+        && bash /tmp/miniforge.sh -b -p /opt/conda \
+        && rm /tmp/miniforge.sh; \
+    fi
 
 # ── 内联 conda / pip 镜像配置（两个文件合并为一条 RUN，减少 layer）
 RUN <<'EOF'

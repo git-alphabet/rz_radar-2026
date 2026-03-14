@@ -1,12 +1,13 @@
-# compose.dev.yml — 开发环境（独立文件，无需叠加 compose.yml）
+# compose.dev.yml — 开发环境（standalone，无需叠加其他文件）
 # 用法（项目根目录执行）:
 #   docker compose --project-directory . -f docker/compose.dev.yml up -d
+#   仅构建:   docker compose --project-directory . -f docker/compose.dev.yml build
 #   进入容器: docker compose --project-directory . -f docker/compose.dev.yml exec radar bash
 #   手动跑:   python main.py
 
 services:
   radar:
-    image: ${DOCKER_HUB_USER:-alphabet2006}/${IMAGE_NAME:-rz-radar-2026}:${IMAGE_TAG:-latest}
+    image: alphabet2006/rz-radar-2026:latest
 
     network_mode: host
 
@@ -21,25 +22,21 @@ services:
     environment:
       DISPLAY: ${DISPLAY:-:0}
       MVCAM_COMMON_RUNENV: /opt/MVS/lib
+      LD_LIBRARY_PATH: /workspace/TensorRT-8.6.0.12/lib:/opt/MVS/lib:/opt/MVS/lib/x86_64
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
       PYTHONUNBUFFERED: "1"
-      # TensorRT C++ 库（libnvinfer.so.8 等）路径
-      # 宿主机 TensorRT-8.6.0.12/ 通过 ..:/workspace 挂载进来
-      LD_LIBRARY_PATH: /workspace/TensorRT-8.6.0.12/lib:/opt/MVS/lib
 
     volumes:
-      - ..:/workspace:cached         # 宿主机代码实时同步（..=项目根目录）
-      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ..:/workspace:cached           # 宿主机代码实时同步
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw  # PyQt6 / OpenCV 图形显示
 
-    # USB 相机设备透传（用 devices 而非 volumes，语义不同）
     devices:
       - /dev/bus/usb
 
-    privileged: true                 # 海康 SDK 需要直接访问 USB 设备节点
+    privileged: true                   # 海康 SDK 需要直接访问 USB 设备节点
 
     working_dir: /workspace
-    # 设置 usbfs 内存（海康 U3V 相机必须，默认 16MB 不够导致 StartGrabbing 失败）
     command: >
       bash -c "echo 2000 > /sys/module/usbcore/parameters/usbfs_memory_mb
       && sleep infinity"
