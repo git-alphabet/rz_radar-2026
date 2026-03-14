@@ -6,27 +6,37 @@ perspective_warp.py — 透视变换工具（考核地图制作）
     python perspective_warp.py
 
 操作：
-  鼠标左键 — 依次点 4 个角点（任意顺序，自动排列为 左上/右上/右下/左下）
+    鼠标左键 — 按顺序点 4 个角点（1→2 映射Y方向，2→3 映射X方向）
   R        — 重置重新点
-  S        — 保存结果到 OUTPUT_IMAGE
+    S        — 同时保存竖图和横图
   Q / ESC  — 退出
 """
 
 import cv2
 import numpy as np
+import yaml
 
-# ══════════════════════════════════════════════════════════════
-#  配置参数（直接在这里改，不用命令行传参）
-# ══════════════════════════════════════════════════════════════
 
-INPUT_IMAGE   = "test.jpg"        # 你拍的图片路径
-OUTPUT_IMAGE  = "map_custom.jpg"  # 输出保存路径
 
-OUTPUT_WIDTH  = 2800              # 输出图宽度（px）横向
-OUTPUT_HEIGHT = 1500              # 输出图高度（px）纵向
-# 输出比例与 RM 标准地图一致: 2800×1500，显示时 900×480
+INPUT_IMAGE   = "images/image.png"        # 拍的图片路径
+OUTPUT_IMAGE_VERTICAL   = "map_custom_vertical.jpg"    # 输出竖图（长边竖向）
+OUTPUT_IMAGE_HORIZONTAL = "map_custom_horizontal.jpg"  # 输出横图（长边横向）
 
-# ══════════════════════════════════════════════════════════════
+CONFIG_YAML = "config.yaml"  # 读取原项目地图像素基准（global.map_size）
+DEFAULT_PROJECT_MAP_SIZE = (2800, 1500)  # 兜底像素基准（与原项目一致）
+
+# 原项目地图对应的真实尺寸（cm）
+PROJECT_FIELD_WIDTH_CM = 2800.0
+PROJECT_FIELD_HEIGHT_CM = 1500.0
+
+# 当前要裁切区域的实测尺寸（cm）
+MEASURED_GROUND_WIDTH_CM = 79.6
+MEASURED_GROUND_HEIGHT_CM = 79.6
+
+# 在“按项目基准换算”的基础上整体放大，提升清晰度（保持比例不变）
+OUTPUT_UPSCALE = 10.0
+
+MIN_OUTPUT_SIDE_PX = 2
 
 
 def sort_quad(pts):
@@ -42,23 +52,57 @@ def sort_quad(pts):
     ], dtype=np.float32)
 
 
-def warp_image(img, quad_orig):
-    """透视变换：quad_orig 四点 → OUTPUT_WIDTH × OUTPUT_HEIGHT 矩形。"""
-    W, H = OUTPUT_WIDTH, OUTPUT_HEIGHT
+def load_project_map_size():
+    """优先从 config.yaml 读取 map_size，失败时回退默认值。"""
+    try:
+        with open(CONFIG_YAML, "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f)
+        map_size = cfg.get("global", {}).get("map_size", None)
+        if isinstance(map_size, (list, tuple)) and len(map_size) == 2:
+            w, h = int(map_size[0]), int(map_size[1])
+            if w > 0 and h > 0:
+                return w, h
+    except Exception:
+        pass
+    return DEFAULT_PROJECT_MAP_SIZE
+
+
+def resolve_output_size():
+    """按“实测cm + 项目地图像素基准”换算输出像素尺寸。"""
+    map_w_px, map_h_px = load_project_map_size()
+    sx = map_w_px / PROJECT_FIELD_WIDTH_CM
+    sy = map_h_px / PROJECT_FIELD_HEIGHT_CM
+
+    base_w = MEASURED_GROUND_WIDTH_CM * sx
+    base_h = MEASURED_GROUND_HEIGHT_CM * sy
+
+    out_w = max(int(round(base_w * OUTPUT_UPSCALE)), MIN_OUTPUT_SIDE_PX)
+    out_h = max(int(round(base_h * OUTPUT_UPSCALE)), MIN_OUTPUT_SIDE_PX)
+    return out_w, out_h, sx, sy, map_w_px, map_h_px
+
+
+def warp_image(img, quad_orig, out_w, out_h):
+    """透视变换：quad_orig 四点 → out_w × out_h 矩形。"""
+    W, H = int(out_w), int(out_h)
     dst = np.array([
         [0,     0    ],
-        [W - 1, 0    ],
-        [W - 1, H - 1],
         [0,     H - 1],
+        [W - 1, H - 1],
+        [W - 1, 0    ],
     ], dtype=np.float32)
     M = cv2.getPerspectiveTransform(quad_orig, dst)
     return cv2.warpPerspective(img, M, (W, H))
 
 
-def draw_overlay(canvas, points, scale, hover=None):
+def make_portrait_from_landscape(img_landscape):
+    """由横图生成竖图（逆时针旋转 90°）。"""
+    return cv2.rotate(img_landscape, cv2.ROTATE_90_COUNTERCLOCKWISE)
+
+
+def draw_overlay(canvas, points, scale, output_width_px, output_height_px, hover=None):
     """在显示画布上绘制点、连线、标签、提示文字。"""
     colors = [(0, 255, 0), (0, 200, 255), (255, 100, 0), (180, 0, 255)]
-    labels = ['TL', 'TR', 'BR', 'BL']
+    labels = ['1', '2', '3', '4']
     n = len(points)
 
     # 预览线（未满4点）
@@ -66,10 +110,9 @@ def draw_overlay(canvas, points, scale, hover=None):
         cv2.line(canvas, points[-1], hover, (180, 180, 180), 1, cv2.LINE_AA)
 
     if n == 4:
-        quad = sort_quad(points)
-        cv2.polylines(canvas, [quad.astype(np.int32)], True, (0, 255, 255), 2, cv2.LINE_AA)
-        for i, pt in enumerate(quad):
-            p = tuple(pt.astype(int))
+        quad = np.array(points, dtype=np.int32)
+        cv2.polylines(canvas, [quad], True, (0, 255, 255), 2, cv2.LINE_AA)
+        for i, p in enumerate(points):
             cv2.circle(canvas, p, 7, colors[i], -1, cv2.LINE_AA)
             cv2.putText(canvas, labels[i], (p[0] + 8, p[1] - 8),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, colors[i], 2)
@@ -83,13 +126,24 @@ def draw_overlay(canvas, points, scale, hover=None):
                           (180, 180, 180), 1, cv2.LINE_AA)
 
     # 状态栏
-    hint = f"已选 {n}/4 点  |  输出尺寸 {OUTPUT_WIDTH}x{OUTPUT_HEIGHT}  |  R=重置  S=保存  Q=退出"
+    hint = (
+        f"已选 {n}/4 点 | 1-2=Y 2-3=X | 横图 {output_width_px}x{output_height_px}"
+        f" + 竖图 {output_height_px}x{output_width_px}"
+    )
     cv2.rectangle(canvas, (0, 0), (canvas.shape[1], 30), (0, 0, 0), -1)
     cv2.putText(canvas, hint, (8, 22),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
 
 
 def main():
+    output_width_px, output_height_px, px_per_cm_x, px_per_cm_y, map_w_px, map_h_px = resolve_output_size()
+    print(
+        f"[尺寸] 地图基准={map_w_px}x{map_h_px}px, "
+        f"比例=({px_per_cm_x:.4f}, {px_per_cm_y:.4f}) px/cm, "
+        f"放大系数={OUTPUT_UPSCALE:.2f}, 输出={output_width_px}x{output_height_px}px "
+        f"(来自 {MEASURED_GROUND_WIDTH_CM}x{MEASURED_GROUND_HEIGHT_CM} cm)"
+    )
+
     img_orig = cv2.imread(INPUT_IMAGE)
     if img_orig is None:
         print(f"[错误] 无法读取图片: {INPUT_IMAGE}")
@@ -103,34 +157,54 @@ def main():
     img_disp_base = cv2.resize(img_orig, (disp_w, disp_h)) if scale < 1.0 else img_orig.copy()
 
     points_disp = []   # 显示坐标下的点击点
-    warped = None
+    warped_horizontal = None
+    warped_vertical = None
     hover_pt = None
 
-    WIN_SRC  = f"透视变换 — 点击4个角点  [{INPUT_IMAGE}]"
-    WIN_WARP = f"俯视结果  {OUTPUT_WIDTH}x{OUTPUT_HEIGHT}  (S保存 Q退出)"
+    WIN_SRC = "perspective_src"
+    WIN_WARP_H = "warp_horizontal"
+    WIN_WARP_V = "warp_vertical"
 
-    cv2.namedWindow(WIN_SRC, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(WIN_SRC, disp_w, disp_h)
+    try:
+        cv2.namedWindow(WIN_SRC, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(WIN_SRC, disp_w, disp_h)
+    except cv2.error as e:
+        print(f"[错误] 创建窗口失败: {e}")
+        print("请检查 DISPLAY、X11 转发与 OpenCV 高GUI环境。")
+        return
 
     def apply_warp():
-        nonlocal warped
-        quad_disp = sort_quad(points_disp)
-        quad_orig = quad_disp / scale      # 映射回原图坐标
-        warped = warp_image(img_orig, quad_orig)
+        nonlocal warped_horizontal, warped_vertical
+        quad_orig = np.array(points_disp, dtype=np.float32) / scale  # 映射回原图坐标（按点击顺序）
+        warped_horizontal = warp_image(img_orig, quad_orig, output_width_px, output_height_px)
+        warped_vertical = make_portrait_from_landscape(warped_horizontal)
 
-        # 结果窗口以不超过 1200px 宽显示
-        ws = min(1200 / OUTPUT_WIDTH, 700 / OUTPUT_HEIGHT, 1.0)
-        preview = cv2.resize(warped, (int(OUTPUT_WIDTH * ws), int(OUTPUT_HEIGHT * ws)))
-        cv2.namedWindow(WIN_WARP, cv2.WINDOW_NORMAL)
-        cv2.resizeWindow(WIN_WARP, preview.shape[1], preview.shape[0])
-        cv2.imshow(WIN_WARP, preview)
+        # 横图预览
+        ws_h = min(1200 / output_width_px, 700 / output_height_px, 1.0)
+        preview_h = cv2.resize(
+            warped_horizontal,
+            (int(output_width_px * ws_h), int(output_height_px * ws_h))
+        )
+        cv2.namedWindow(WIN_WARP_H, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(WIN_WARP_H, preview_h.shape[1], preview_h.shape[0])
+        cv2.imshow(WIN_WARP_H, preview_h)
+
+        # 竖图预览
+        H_v, W_v = warped_vertical.shape[:2]
+        ws_v = min(700 / W_v, 900 / H_v, 1.0)
+        preview_v = cv2.resize(warped_vertical, (int(W_v * ws_v), int(H_v * ws_v)))
+        cv2.namedWindow(WIN_WARP_V, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(WIN_WARP_V, preview_v.shape[1], preview_v.shape[0])
+        cv2.imshow(WIN_WARP_V, preview_v)
 
     def save():
-        if warped is None:
+        if warped_horizontal is None or warped_vertical is None:
             print("[提示] 还没有生成结果，请先选点。")
             return
-        cv2.imwrite(OUTPUT_IMAGE, warped)
-        print(f"[保存] {OUTPUT_IMAGE}  ({OUTPUT_WIDTH}x{OUTPUT_HEIGHT})")
+        cv2.imwrite(OUTPUT_IMAGE_HORIZONTAL, warped_horizontal)
+        cv2.imwrite(OUTPUT_IMAGE_VERTICAL, warped_vertical)
+        print(f"[保存-横图] {OUTPUT_IMAGE_HORIZONTAL}  ({output_width_px}x{output_height_px})")
+        print(f"[保存-竖图] {OUTPUT_IMAGE_VERTICAL}  ({output_height_px}x{output_width_px})")
 
     def on_mouse(event, x, y, flags, _):
         nonlocal hover_pt
@@ -140,11 +214,22 @@ def main():
             if len(points_disp) == 4:
                 apply_warp()
 
-    cv2.setMouseCallback(WIN_SRC, on_mouse)
+    canvas_init = img_disp_base.copy()
+    draw_overlay(canvas_init, points_disp, scale, output_width_px, output_height_px, hover_pt)
+    cv2.imshow(WIN_SRC, canvas_init)
+    cv2.waitKey(1)
+
+    try:
+        cv2.setMouseCallback(WIN_SRC, on_mouse)
+    except cv2.error as e:
+        print(f"[错误] 绑定鼠标回调失败: {e}")
+        print("窗口句柄无效，请确认图形窗口可正常弹出。")
+        cv2.destroyAllWindows()
+        return
 
     while True:
         canvas = img_disp_base.copy()
-        draw_overlay(canvas, points_disp, scale, hover_pt)
+        draw_overlay(canvas, points_disp, scale, output_width_px, output_height_px, hover_pt)
         cv2.imshow(WIN_SRC, canvas)
 
         key = cv2.waitKey(16) & 0xFF
@@ -152,9 +237,12 @@ def main():
             break
         elif key == ord('r'):
             points_disp.clear()
-            warped = None
-            if cv2.getWindowProperty(WIN_WARP, cv2.WND_PROP_VISIBLE) >= 1:
-                cv2.destroyWindow(WIN_WARP)
+            warped_horizontal = None
+            warped_vertical = None
+            if cv2.getWindowProperty(WIN_WARP_H, cv2.WND_PROP_VISIBLE) >= 1:
+                cv2.destroyWindow(WIN_WARP_H)
+            if cv2.getWindowProperty(WIN_WARP_V, cv2.WND_PROP_VISIBLE) >= 1:
+                cv2.destroyWindow(WIN_WARP_V)
         elif key == ord('s'):
             save()
 
