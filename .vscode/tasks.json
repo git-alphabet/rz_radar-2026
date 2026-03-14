@@ -25,10 +25,21 @@
         {
             "label": "Docker: Run Dev",
             "type": "shell",
-            "command": "set -a && source .env && set +a && xhost +local:docker 2>/dev/null; docker compose -f docker/compose.dev.yml up",
+            "command": "set -a && source .env && set +a && export LOCAL_UID=$(id -u) LOCAL_GID=$(id -g) && xhost +local:docker 2>/dev/null; docker compose -f docker/compose.dev.yml up",
             "presentation": {
                 "reveal": "always",
                 "panel": "dedicated"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Docker: Snapshot & Push",
+            "type": "shell",
+            "command": "docker compose -f docker/compose.snapshot.yml up --abort-on-container-exit --exit-code-from snapshot && docker compose -f docker/compose.snapshot.yml down",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
             },
             "problemMatcher": []
         }
