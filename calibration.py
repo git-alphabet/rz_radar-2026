@@ -4,8 +4,8 @@ import time
 import cv2
 import numpy as np
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QPixmap, QImage, QTextCursor
-from PyQt6.QtWidgets import QApplication, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QTextEdit, QGridLayout
+from PyQt6.QtGui import QPixmap, QImage, QTextCursor, QFont, QFontDatabase
+from PyQt6.QtWidgets import QApplication, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QTextEdit, QGridLayout, QSizePolicy
 
 
 from hik_camera import call_back_get_image, start_grab_and_get_data_size, close_and_destroy_device, set_Value, \
@@ -147,17 +147,41 @@ def video_capture_get():
 color = [(255, 255, 255), (0, 255, 0), (0, 0, 255)]
 
 
+def apply_chinese_font(app):
+    preferred_fonts = [
+        "Noto Sans CJK SC",
+        "Noto Sans CJK",
+        "WenQuanYi Zen Hei",
+        "Microsoft YaHei",
+        "SimHei",
+    ]
+    families = set(QFontDatabase.families())
+
+    for family in preferred_fonts:
+        if family in families:
+            app.setFont(QFont(family, 10))
+            print(f"使用中文字体: {family}")
+            return
+
+    print("未检测到常用中文字体，界面中文可能显示为方块")
+
+
 class MyUI(QWidget):
     def __init__(self):
         super().__init__()
         self.capturing = True
+        self.left_scale_x = 1.0
+        self.left_scale_y = 1.0
+        self.right_scale_x = 1.0
+        self.right_scale_y = 1.0
         self.initUI()
 
     def initUI(self):
         # 左上角部分
         self.state = state
         self.left_top_label = QLabel(self)
-        self.left_top_label.setFixedSize(1350, 1000)
+        self.left_top_label.setMinimumSize(640, 480)
+        self.left_top_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.left_top_label.setStyleSheet("border: 2px solid black;")
         self.left_top_label.mousePressEvent = self.left_top_clicked
         self.image_points = [[(0, 0), (0, 0), (0, 0), (0, 0)], [(0, 0), (0, 0), (0, 0), (0, 0)],
@@ -168,29 +192,30 @@ class MyUI(QWidget):
         self.map_count = 0
         # 右上角部分
         self.right_top_label = QLabel(self)
-        self.right_top_label.setFixedSize(550, 900)
+        self.right_top_label.setMinimumSize(320, 480)
+        self.right_top_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.right_top_label.setStyleSheet("border: 2px solid black;")
         self.right_top_label.mousePressEvent = self.right_top_clicked
 
         # 左下角部分
         self.left_bottom_text = QTextEdit(self)
-        self.left_bottom_text.setFixedSize(300, 60)
+        self.left_bottom_text.setMinimumHeight(80)
 
         # 右下角部分
         self.button1 = QPushButton('开始标定', self)
-        self.button1.setFixedSize(100, 30)
+        self.button1.setMinimumSize(100, 36)
         self.button1.clicked.connect(self.button1_clicked)
 
         self.button2 = QPushButton('切换高度', self)
-        self.button2.setFixedSize(100, 30)
+        self.button2.setMinimumSize(100, 36)
         self.button2.clicked.connect(self.button2_clicked)
 
         self.button3 = QPushButton('加载坐标', self)
-        self.button3.setFixedSize(100, 30)
+        self.button3.setMinimumSize(100, 36)
         self.button3.clicked.connect(self.button3_clicked)
 
         self.button4 = QPushButton('保存计算', self)
-        self.button4.setFixedSize(100, 30)
+        self.button4.setMinimumSize(100, 36)
         self.button4.clicked.connect(self.button4_clicked)
         self.height = 0
         self.T = []
@@ -205,16 +230,8 @@ class MyUI(QWidget):
         left_image = camera_image
         right_image = cv2.imread(right_image_path)
 
-        # 记录缩放比例
-        self.left_scale_x = left_image.shape[1] / 1350.0
-        self.left_scale_y = left_image.shape[0] / 1000.0
-
-        self.right_scale_x = right_image.shape[1] / 550.0
-        self.right_scale_y = right_image.shape[0] / 900.0
-        left_image = cv2.cvtColor(left_image, cv2.COLOR_BGR2RGB)
-        self.left_image = cv2.resize(left_image, (1350, 1000))
-        right_image = cv2.cvtColor(right_image, cv2.COLOR_BGR2RGB)
-        self.right_image = cv2.resize(right_image, (550, 900))
+        self.left_image = cv2.cvtColor(left_image, cv2.COLOR_BGR2RGB)
+        self.right_image = cv2.cvtColor(right_image, cv2.COLOR_BGR2RGB)
         # 缩放图像
         self.update_images()
 
@@ -249,9 +266,19 @@ class MyUI(QWidget):
         hbox = QHBoxLayout()
         hbox.addLayout(vbox_left)
         hbox.addLayout(vbox_right)
+        hbox.setStretch(0, 7)
+        hbox.setStretch(1, 3)
 
         self.setLayout(hbox)
-        self.setGeometry(0, 0, 1900, 1000)
+        screen = QApplication.primaryScreen()
+        available = screen.availableGeometry() if screen else self.geometry()
+        target_w = int(available.width() * 0.95)
+        target_h = int(available.height() * 0.95)
+        self.resize(target_w, target_h)
+        self.move(
+            available.x() + (available.width() - target_w) // 2,
+            available.y() + (available.height() - target_h) // 2,
+        )
         self.setWindowTitle('Calibration UI')
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)  # 修改枚举
         self.show()
@@ -262,19 +289,27 @@ class MyUI(QWidget):
             self.close()
 
     def update_images(self):
-
-        left_pixmap = self.convert_cvimage_to_pixmap(self.left_image)
+        left_width = max(1, self.left_top_label.width())
+        left_height = max(1, self.left_top_label.height())
+        self.left_scale_x = self.left_image.shape[1] / float(left_width)
+        self.left_scale_y = self.left_image.shape[0] / float(left_height)
+        left_preview = cv2.resize(self.left_image, (left_width, left_height))
+        left_pixmap = self.convert_cvimage_to_pixmap(left_preview)
         self.left_top_label.setPixmap(left_pixmap)
 
-
-        right_pixmap = self.convert_cvimage_to_pixmap(self.right_image)
+        right_width = max(1, self.right_top_label.width())
+        right_height = max(1, self.right_top_label.height())
+        self.right_scale_x = self.right_image.shape[1] / float(right_width)
+        self.right_scale_y = self.right_image.shape[0] / float(right_height)
+        right_preview = cv2.resize(self.right_image, (right_width, right_height))
+        right_pixmap = self.convert_cvimage_to_pixmap(right_preview)
         self.right_top_label.setPixmap(right_pixmap)
 
     def update_camera(self):
         if self.capturing:
             img0 = camera_image
             left_image = cv2.cvtColor(img0, cv2.COLOR_BGR2RGB)
-            self.left_image = cv2.resize(left_image, (1350, 1000))
+            self.left_image = left_image
             self.update_images()
 
     def left_top_clicked(self, event):
@@ -285,10 +320,10 @@ class MyUI(QWidget):
 
             self.image_points[self.height][self.image_count % 4] = (x, y)
 
-            cv2.circle(self.left_image, (int(x / self.left_scale_x), int(y / self.left_scale_y)), 4, color[self.height],
+            cv2.circle(self.left_image, (x, y), 6, color[self.height],
                        -1)
             cv2.putText(self.left_image, str(self.image_count % 4),
-                        (int(x / self.left_scale_x), int(y / self.left_scale_y)), cv2.FONT_HERSHEY_SIMPLEX, 1,
+                        (x, y), cv2.FONT_HERSHEY_SIMPLEX, 1,
                         color[self.height], 3)
             self.image_count += 1
             self.update_images()
@@ -301,15 +336,20 @@ class MyUI(QWidget):
             y = int(event.position().y() * self.right_scale_y)  # 修改pos()为position()
             self.map_points[self.height][self.map_count % 4] = (x, y)
 
-            cv2.circle(self.right_image, (int(x / self.right_scale_x), int(y / self.right_scale_y)), 4,
+            cv2.circle(self.right_image, (x, y), 6,
                        color[self.height],
                        -1)
             cv2.putText(self.right_image, str(self.map_count % 4),
-                        (int(x / self.right_scale_x), int(y / self.right_scale_y)), cv2.FONT_HERSHEY_SIMPLEX, 1,
+                        (x, y), cv2.FONT_HERSHEY_SIMPLEX, 1,
                         color[self.height], 2)
             self.map_count += 1
             self.update_images()
             self.append_text(f'地图真实点击坐标：({x}, {y})')
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, 'left_image') and hasattr(self, 'right_image'):
+            self.update_images()
 
     def button1_clicked(self):
         # 按钮1点击事件
@@ -388,5 +428,6 @@ if __name__ == '__main__':
         print("等待图像。。。")
         time.sleep(0.5)
     app = QApplication(sys.argv)
+    apply_chinese_font(app)
     myui = MyUI()
     sys.exit(app.exec())
