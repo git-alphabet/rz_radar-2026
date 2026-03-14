@@ -1,0 +1,33 @@
+# .dockerignore — 减小 Docker build context，加速 build
+# 只排除不需要打包进镜像的文件
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# 开发工具
+.git/
+.gitignore
+.vscode/
+.github/
+
+# 大型本地文件（不进镜像，运行时挂载）
+TensorRT-8.6.0.12/
+*.pdf
+images/
+images-2025/
+
+# Conda/venv（容器内自建 conda env）
+*.conda
+*.egg-info/
+
+# 顶层 README（非 docker/ 下的）
+README.md
+README.en.md
+
+# docker/README.docker.md 保留在构建上下文中（防止目录为空导致 COPY 失败）
+
+# compose / env 文件在 docker/ 里不需要进 /tmp/mvs_sdk/
+docker/compose*.yml

@@ -1,0 +1,27 @@
+# compose.dev.yml — 开发配置（与 compose.yml 叠加使用）
+# 特点:
+#   - 代码目录挂载进容器，宿主机改代码立即生效（无需重新 build）
+#   - 交互式终端
+#   - 显式指定 CMD（方便临时改为 bash 调试）
+# 用法（在项目根目录执行）:
+#   docker compose --project-directory . -f docker/compose.yml -f docker/compose.dev.yml up
+#   查看日志: docker compose --project-directory . -f docker/compose.yml logs -f radar
+
+services:
+  radar:
+    # 开发时代码挂载：宿主机修改 → 容器内立即可见
+    # 注意: models/*.engine / *.npy 等大文件也会挂载进来
+    volumes:
+      - .:/workspace:cached
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+
+    working_dir: /workspace
+    command: python main.py
+
+    # 允许 Ctrl+C 正常退出
+    stdin_open: true
+    tty: true
+
+    # 开发时输出不缓冲，方便实时看日志
+    environment:
+      PYTHONUNBUFFERED: "1"
