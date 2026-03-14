@@ -2,9 +2,9 @@
 
 ## 强制初始化流程（每次对话开始，无一例外）
 
-1. **立即调用 `mcp__serena__check_onboarding_performed`** 确认项目记忆
-2. **读取所有 context 中引用的文件**（system-reminder 里出现的文件路径全部 Read）
-3. 然后再回答问题
+
+1. **读取所有 context 中引用的文件**（system-reminder 里出现的文件路径全部 Read）
+2. 然后再回答问题
 
 ## 开发环境
 
@@ -53,21 +53,8 @@
 - 添加代码前先读完整份文件
 - 遇到问题按：**复现 → 定位 → 排查 → 解决 → 验证 → 复盘**
 - 用英文思考，用中文回答
-- 自动迭代,我喜欢自动化，不喜欢浪费一次对话次数
-- 充分利用 Serena MCP 工具（符号查找、代码检索等）和插件
-- 每次回答末尾发 1
+- 自动迭代,我喜欢自动化
+- 充分利用和插件
+- 第一次回答末尾发 1，第二次最后发2,以此类推
 
-当前目标：把雷达站环境打包到docker  现在已经做了一些
-
-## Serena MCP 工具速查
-
-```
-mcp__serena__check_onboarding_performed — 每次对话必调
-mcp__serena__find_symbol               — 查找符号定义
-mcp__serena__find_referencing_symbols  — 查找引用
-mcp__serena__get_symbols_overview      — 文件顶层符号列表
-mcp__serena__search_for_pattern        — 正则搜索
-mcp__serena__write_memory              — 写记忆
-mcp__serena__read_memory               — 读记忆
-mcp__serena__list_memories             — 列出所有记忆
-```
+当前目标：
