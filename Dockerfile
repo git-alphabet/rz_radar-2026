@@ -42,6 +42,8 @@ RUN printf 'Acquire::http::Proxy "DIRECT";\nAcquire::https::Proxy "DIRECT";\n' \
     && apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
+        fonts-noto-cjk \
+        fonts-wqy-zenhei \
         libdbus-1-3 \
         libegl1 \
         libfontconfig1 \
