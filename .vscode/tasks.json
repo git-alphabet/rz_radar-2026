@@ -1,109 +1,31 @@
 {
     "version": "2.0.0",
     "tasks": [
-        // ── 前置：确保 .env 存在 ─────────────────────────────────
-        {
-            "label": "check-env-file",
-            "type": "shell",
-            "command": "test -f .env || (cp .env.example .env && echo '⚠  已生成 .env，请先编辑填写 DOCKER_HUB_USER 等配置' && exit 1)",
-            "presentation": { "reveal": "silent", "panel": "shared" }
-        },
-
-        // ── Docker Login ──────────────────────────────────────────
-        {
-            "label": "Docker: Login",
-            "type": "shell",
-            "command": "docker login",
-            "presentation": {
-                "reveal": "always",
-                "panel": "dedicated",
-                "focus": true
-            }
-        },
-
-        // ── Build ─────────────────────────────────────────────────
-        // IMAGE_TAG 优先取 .env 中的值；未设置时自动生成时间戳（精确到分钟）
-        // tag 写入 /tmp/.rz_radar_last_tag，供单独 Push 任务读取
-        {
-            "label": "Docker: Build",
-            "type": "shell",
-            "command": "set -a && source .env && set +a && IMAGE_TAG=${IMAGE_TAG:-$(date +%Y%m%d-%H%M)} && echo \"$IMAGE_TAG\" > /tmp/.rz_radar_last_tag && echo \"Building ${DOCKER_HUB_USER}/${IMAGE_NAME}:${IMAGE_TAG}\" && docker compose --project-directory . -f docker/compose.yml -f docker/compose.build.yml build --progress=plain && docker tag ${DOCKER_HUB_USER}/${IMAGE_NAME}:${IMAGE_TAG} ${DOCKER_HUB_USER}/${IMAGE_NAME}:latest && echo \"Tagged :latest\"",
-            "group": {
-                "kind": "build",
-                "isDefault": true
-            },
-            "dependsOn": ["check-env-file"],
-            "presentation": {
-                "reveal": "always",
-                "panel": "dedicated",
-                "clear": true
-            },
-            "problemMatcher": []
-        },
-
-        // ── Push ──────────────────────────────────────────────────
-        // 从 Build 写下的临时文件读取 tag，保证 build/push 用同一个值
-        // 若手动指定过 IMAGE_TAG（.env 中），则以 .env 为准
-        {
-            "label": "Docker: Push",
-            "type": "shell",
-            "command": "set -a && source .env && set +a && IMAGE_TAG=${IMAGE_TAG:-$(cat /tmp/.rz_radar_last_tag 2>/dev/null)} && if [ -z \"$IMAGE_TAG\" ]; then echo 'tag 不存在，请先运行 Docker: Build' && exit 1; fi && docker push ${DOCKER_HUB_USER}/${IMAGE_NAME}:${IMAGE_TAG} && docker push ${DOCKER_HUB_USER}/${IMAGE_NAME}:latest && echo \"Pushed :${IMAGE_TAG} + :latest\"",
-            "dependsOn": ["check-env-file"],
-            "presentation": {
-                "reveal": "always",
-                "panel": "dedicated"
-            },
-            "problemMatcher": []
-        },
-
-        // ── Build & Push ─────────────────────────────────────────
-        // tag 在整个命令中只计算一次，build 和 push 使用同一个值
         {
             "label": "Docker: Build & Push",
             "type": "shell",
-            "command": "set -a && source .env && set +a && IMAGE_TAG=${IMAGE_TAG:-$(date +%Y%m%d-%H%M)} && echo \"$IMAGE_TAG\" > /tmp/.rz_radar_last_tag && echo \"Building ${DOCKER_HUB_USER}/${IMAGE_NAME}:${IMAGE_TAG}\" && docker compose --project-directory . -f docker/compose.yml -f docker/compose.build.yml build --progress=plain && docker tag ${DOCKER_HUB_USER}/${IMAGE_NAME}:${IMAGE_TAG} ${DOCKER_HUB_USER}/${IMAGE_NAME}:latest && docker push ${DOCKER_HUB_USER}/${IMAGE_NAME}:${IMAGE_TAG} && docker push ${DOCKER_HUB_USER}/${IMAGE_NAME}:latest && echo \"Done: :${IMAGE_TAG} + :latest\"",
-            "dependsOn": ["check-env-file"],
+            "command": "HOST_IP=$(ip addr show docker0 | grep 'inet ' | awk '{print $2}' | cut -d'/' -f1); set -a && source .env && set +a && IMAGE_TAG=${IMAGE_TAG:-$(date +%Y%m%d-%H%M)} && echo \"$IMAGE_TAG\" > /tmp/.rz_radar_last_tag && echo \"Building ${DOCKER_HUB_USER}/${IMAGE_NAME}:${IMAGE_TAG}\" && docker build --build-arg http_proxy=http://$HOST_IP:7897 --build-arg https_proxy=http://$HOST_IP:7897 . && docker compose --project-directory . -f docker/compose.yml -f docker/compose.build.yml build --progress=plain && docker tag ${DOCKER_HUB_USER}/${IMAGE_NAME}:${IMAGE_TAG} ${DOCKER_HUB_USER}/${IMAGE_NAME}:latest && docker push ${DOCKER_HUB_USER}/${IMAGE_NAME}:${IMAGE_TAG} && docker push ${DOCKER_HUB_USER}/${IMAGE_NAME}:latest && echo \"Done: :${IMAGE_TAG} + :latest\"",
             "presentation": {
                 "reveal": "always",
                 "panel": "dedicated",
                 "clear": true
             },
-            "problemMatcher": [],
-            "group": "build"
-        },
-
-        // ── Run Dev（代码挂载，宿主机改代码生效）────────────────────
-        {
-            "label": "Docker: Run Dev",
-            "type": "shell",
-            "command": "set -a && source .env && set +a && xhost +local:docker 2>/dev/null; docker compose -f compose.dev.yml up -d && docker compose -f compose.dev.yml exec radar bash",
-            "dependsOn": ["check-env-file"],
-            "presentation": {
-                "reveal": "always",
-                "panel": "dedicated",
-                "focus": true
-            },
             "problemMatcher": []
         },
-
-        // ── Run Prod ─────────────────────────────────────────────
         {
             "label": "Docker: Run Prod",
             "type": "shell",
-            "command": "set -a && source .env && set +a && IMAGE_TAG=${IMAGE_TAG:-latest} && xhost +local:docker 2>/dev/null; docker compose --project-directory . -f docker/compose.yml up",
-            "dependsOn": ["check-env-file"],
+            "command": "HOST_IP=$(ip addr show docker0 | grep 'inet ' | awk '{print $2}' | cut -d'/' -f1); set -a && source .env && set +a && IMAGE_TAG=${IMAGE_TAG:-latest} && xhost +local:docker 2>/dev/null; docker compose --project-directory . -f docker/compose.yml up --build-arg http_proxy=http://$HOST_IP:7897 --build-arg https_proxy=http://$HOST_IP:7897",
             "presentation": {
                 "reveal": "always",
                 "panel": "dedicated"
             },
             "problemMatcher": []
         },
-
-        // ── 查看日志 ──────────────────────────────────────────────
         {
-            "label": "Docker: Logs",
+            "label": "Docker: Run Dev",
             "type": "shell",
-            "command": "docker compose --project-directory . -f docker/compose.yml logs -f radar",
+            "command": "set -a && source .env && set +a && xhost +local:docker 2>/dev/null; docker compose -f docker/compose.dev.yml up",
             "presentation": {
                 "reveal": "always",
                 "panel": "dedicated"
