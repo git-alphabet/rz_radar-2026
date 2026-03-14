@@ -144,3 +144,6 @@ docker/*.deb
 docker/*.tar.gz
 docker/*.run
 docker/*.sh
+
+.github/
+/CLAUDE.md
