@@ -11,6 +11,8 @@ services:
     env_file:
       - ../.env
     user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    group_add:
+      - "0"  # 让非 root 用户可访问 /dev/bus/usb 下 root:root 的 0664 设备节点
 
     network_mode: host
 
