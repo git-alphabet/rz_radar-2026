@@ -405,6 +405,10 @@ def set_grab_strategy(cam, grabstrategy=0, outputqueuesize=1):
     • LatestImages: 从输出缓存列表中获取最新的OutputQueueSize帧图像，其中OutputQueueSize范围为1 - ImageNodeNum，可用MV_CC_SetOutputQueueSize()接口设置，ImageNodeNum默认为1，可用MV_CC_SetImageNodeNum()接口设置OutputQueueSize设置成1等同于LatestImagesOnly策略，OutputQueueSize设置成ImageNodeNum等同于OneByOne策略
     • UpcomingImage: 在调用取流接口时忽略输出缓存列表中所有图像，并等待设备即将生成的一帧图像。该策略只支持GigE设备，不支持U3V设备
     """
+    if not hasattr(cam, "MV_CC_SetGrabStrategy"):
+        print("当前SDK不支持 MV_CC_SetGrabStrategy，已跳过取流策略设置")
+        return
+
     if grabstrategy != 2:
         ret = cam.MV_CC_SetGrabStrategy(enGrabStrategy=grabstrategy)
         if ret != 0:
@@ -418,11 +422,14 @@ def set_grab_strategy(cam, grabstrategy=0, outputqueuesize=1):
         else:
             print("设置 取流策略为 %d  ，设置成功!" % grabstrategy)
 
-        ret = cam.MV_CC_SetOutputQueueSize(nOutputQueueSize=outputqueuesize)
-        if ret != 0:
-            print("设置使出缓存个数失败 ,报错码 ret[0x%x]" % ret)
+        if hasattr(cam, "MV_CC_SetOutputQueueSize"):
+            ret = cam.MV_CC_SetOutputQueueSize(nOutputQueueSize=outputqueuesize)
+            if ret != 0:
+                print("设置使出缓存个数失败 ,报错码 ret[0x%x]" % ret)
+            else:
+                print("设置 输出缓存个数为 %d  ，设置成功!" % outputqueuesize)
         else:
-            print("设置 输出缓存个数为 %d  ，设置成功!" % outputqueuesize)
+            print("当前SDK不支持 MV_CC_SetOutputQueueSize，已跳过输出队列设置")
 
 
 # 显示图像

@@ -7,10 +7,13 @@ import datetime
 import threading
 import time
 from collections import deque
+import os
+from pathlib import Path
+import warnings
 import serial
 from information_ui import draw_information_ui
 from hik_camera import call_back_get_image, start_grab_and_get_data_size, close_and_destroy_device, set_Value, \
-    get_Value, image_control
+    get_Value, image_control, set_image_Node_num, set_grab_strategy
 import sys
 if sys.platform.startswith("win"):    
     sys.path.append("./MvImport")
@@ -18,6 +21,28 @@ if sys.platform.startswith("win"):
 else:
     sys.path.append("./MvImport_Linux")
     from MvImport_Linux.MvCameraControl_class import *
+
+
+def _setup_runtime_env():
+    runtime_root = Path("/tmp/rz_radar_runtime")
+    mpl_cache_dir = runtime_root / "matplotlib"
+    xdg_cache_dir = runtime_root / "xdg-cache"
+    xdg_config_dir = runtime_root / "xdg-config"
+
+    for cache_dir in (mpl_cache_dir, xdg_cache_dir / "fontconfig", xdg_config_dir):
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+    os.environ.setdefault("MPLCONFIGDIR", str(mpl_cache_dir))
+    os.environ.setdefault("XDG_CACHE_HOME", str(xdg_cache_dir))
+    os.environ.setdefault("XDG_CONFIG_HOME", str(xdg_config_dir))
+
+
+_setup_runtime_env()
+warnings.filterwarnings(
+    "ignore",
+    message="pkg_resources is deprecated as an API.*",
+    category=UserWarning,
+)
 
 import cv2
 import numpy as np
@@ -341,6 +366,24 @@ def create_filter(config):
     else:
         raise ValueError(f"Unsupported filter type: {filter_type}")
 
+
+def project_to_map(camera_point):
+    mapped_point = cv2.perspectiveTransform(camera_point.reshape(1, 1, 2), M_ground)
+    x_c = max(int(mapped_point[0][0][0]), 0)
+    y_c = max(int(mapped_point[0][0][1]), 0)
+    x_c = min(x_c, width)
+    y_c = min(y_c, height)
+    color = mask_image[y_c, x_c]
+    if color[0] == color[1] == color[2] == 0:
+        return x_c, y_c
+
+    mapped_point = cv2.perspectiveTransform(camera_point.reshape(1, 1, 2), M_height_r)
+    x_c = max(int(mapped_point[0][0][0]), 0)
+    y_c = max(int(mapped_point[0][0][1]), 0)
+    x_c = min(x_c, width)
+    y_c = min(y_c, height)
+    return x_c, y_c
+
 # 海康相机图像获取线程
 def hik_camera_get():
     # 获得设备信息
@@ -429,6 +472,14 @@ def hik_camera_get():
     set_Value(cam, param_type="float_value", node_name="ExposureTime",
               node_value=config['camera_params']['exposure_time'])
     set_Value(cam, param_type="float_value", node_name="Gain", node_value=config['camera_params']['gain'])
+
+    ret = cam.MV_CC_SetEnumValue("TriggerMode", 0)
+    if ret != 0:
+        print("warning: TriggerMode 设置失败, ret[0x%x]" % ret)
+
+    set_image_Node_num(cam, Num=3)
+    set_grab_strategy(cam, grabstrategy=1)
+
     # 开启设备取流
     start_grab_and_get_data_size(cam)
     # 主动取流方式抓取图像
@@ -444,14 +495,30 @@ def hik_camera_get():
     stFrameInfo = MV_FRAME_OUT_INFO_EX()
 
     memset(byref(stFrameInfo), 0, sizeof(stFrameInfo))
+    timeout_count = 0
+    last_ok_ts = time.time()
     while True:
-        ret = cam.MV_CC_GetOneFrameTimeout(pData, nDataSize, stFrameInfo, 1000)
+        ret = cam.MV_CC_GetOneFrameTimeout(pData, nDataSize, stFrameInfo, 300)
         if ret == 0:
             image = np.asarray(pData)
             # 处理海康相机的图像格式为OPENCV处理的格式
             camera_image = image_control(data=image, stFrameInfo=stFrameInfo)
+            timeout_count = 0
+            last_ok_ts = time.time()
         else:
-            print("no data[0x%x]" % ret)
+            timeout_count += 1
+            if timeout_count % 20 == 0:
+                print("camera timeout ret[0x%x], count=%d" % (ret, timeout_count))
+
+            if timeout_count >= 60 and time.time() - last_ok_ts > 2.0:
+                print("camera stream stalled, try restart grabbing")
+                cam.MV_CC_StopGrabbing()
+                ret_restart = cam.MV_CC_StartGrabbing()
+                if ret_restart != 0:
+                    print("restart grabbing failed ret[0x%x]" % ret_restart)
+                else:
+                    timeout_count = 0
+                    last_ok_ts = time.time()
 
 
 def video_capture_get():
@@ -874,6 +941,8 @@ elif camera_mode == 'video':
     thread_camera.start()
 
 while camera_image is None:
+    if camera_mode == 'hik' and 'thread_camera' in locals() and not thread_camera.is_alive():
+        raise RuntimeError("海康相机线程已退出，未获取到图像。请检查前序异常日志。")
     print("等待图像。。。")
     time.sleep(0.5)
 
@@ -893,11 +962,17 @@ while True:
     # 第一层神经网络识别
     result0 = detector.predict(img0)
     det_time += 1
+    generic_car_points = []
     for detection in result0:
         cls, xywh, conf = detection
         if cls == 'car':
             left, top, w, h = xywh
             left, top, w, h = int(left), int(top), int(w), int(h)
+
+            generic_camera_point = np.array([[[min(left + 0.5 * w, img_x), min(top + h, img_y)]]], dtype=np.float32)
+            X_car, Y_car = project_to_map(generic_camera_point)
+            generic_car_points.append((X_car, Y_car))
+
             # 存储第一次检测结果和区域
             # ROI出机器人区域
             cropped = camera_image[top:top + h, left:left + w]
@@ -922,33 +997,7 @@ while True:
                         # 原图中装甲板的中心下沿作为待仿射变化的点
                         camera_point = np.array([[[min(x + 0.5 * w, img_x), min(y + 1.5 * h, img_y)]]],
                                                 dtype=np.float32)
-                        # 低到高依次仿射变化
-                        # 先套用地面层仿射变化矩阵
-                        mapped_point = cv2.perspectiveTransform(camera_point.reshape(1, 1, 2), M_ground)
-                        # 限制转换后的点在地图范围内
-                        x_c = max(int(mapped_point[0][0][0]), 0)
-                        y_c = max(int(mapped_point[0][0][1]), 0)
-                        x_c = min(x_c, width)
-                        y_c = min(y_c, height)
-                        color = mask_image[y_c, x_c]  # 通过掩码图像，获取地面层的颜色：黑（0，0，0）
-                        if color[0] == color[1] == color[2] == 0:
-                            X_M = x_c
-                            Y_M = y_c
-                            # Z_M = 0
-                            # filter.add_data(cls, X_M, Y_M)
-                        else:
-                            # 不满足则继续套用R型高地层仿射变换矩阵
-                            mapped_point = cv2.perspectiveTransform(camera_point.reshape(1, 1, 2), M_height_r)
-                            # 限制转换后的点在地图范围内
-                            x_c = max(int(mapped_point[0][0][0]), 0)
-                            y_c = max(int(mapped_point[0][0][1]), 0)
-                            x_c = min(x_c, width)
-                            y_c = min(y_c, height)
-                            color = mask_image[y_c, x_c]  # 通过掩码图像，获取R型高地层的颜色：绿（0，255，0）
-                            X_M = x_c
-                            Y_M = y_c
-                            # Z_M = 400
-                            # filter.add_data(cls, X_M, Y_M)
+                        X_M, Y_M = project_to_map(camera_point)
                         if isinstance(filter, SlidingWindowFilter):
                             # 滑动窗口需要完整坐标序列
                             filter.add_data(cls, X_M, Y_M)
@@ -982,6 +1031,16 @@ while True:
                     cv2.putText(map, "(" + str(ser_x) + "," + str(ser_y) + ")",
                                 (int(filtered_xyz[0]) - 100, int(filtered_xyz[1]) + 60),
                                 cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 255, 255), 4)
+
+    for car_point in generic_car_points:
+        if state == 'R':
+            generic_xyz = (2800 - car_point[1], car_point[0])
+        else:
+            generic_xyz = (car_point[1], 1500 - car_point[0])
+        cv2.circle(map, (int(generic_xyz[0]), int(generic_xyz[1])), 10, (0, 255, 255), -1)
+        cv2.putText(map, "CAR",
+                    (int(generic_xyz[0]) + 12, int(generic_xyz[1]) + 5),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
 
     te = time.time()
     t_p = te - ts
