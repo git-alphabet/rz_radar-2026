@@ -53,6 +53,8 @@ RUN printf 'Acquire::http::Proxy "DIRECT";\nAcquire::https::Proxy "DIRECT";\n' \
         libice6 \
         libsm6 \
         libusb-1.0-0 \
+        libxi6 \
+        libxrender1 \
         libxcb-cursor0 \
         libxcb-icccm4 \
         libxcb-image0 \
@@ -63,6 +65,7 @@ RUN printf 'Acquire::http::Proxy "DIRECT";\nAcquire::https::Proxy "DIRECT";\n' \
         libxcb-xfixes0 \
         libxcb-xinerama0 \
         libxkbcommon-x11-0 \
+        net-tools \
         wget \
     && rm -rf /var/lib/apt/lists/*
 

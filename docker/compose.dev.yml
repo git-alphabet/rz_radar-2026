@@ -27,7 +27,7 @@ services:
     environment:
       DISPLAY: ${DISPLAY:-:0}
       MVCAM_COMMON_RUNENV: /opt/MVS/lib
-      LD_LIBRARY_PATH: /workspace/TensorRT-8.6.0.12/lib:/opt/MVS/lib:/opt/MVS/lib/x86_64
+      LD_LIBRARY_PATH: /workspace/TensorRT-8.6.0.12/lib:/opt/MVS/bin:/opt/MVS/lib:/opt/MVS/lib/x86_64:/opt/MVS/lib/64
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
       PYTHONUNBUFFERED: "1"
@@ -35,6 +35,8 @@ services:
     volumes:
       - ..:/workspace:cached           # 宿主机代码实时同步
       - /tmp/.X11-unix:/tmp/.X11-unix:rw  # PyQt6 / OpenCV 图形显示
+      - /dev:/dev
+      - /run/udev:/run/udev:ro
       - /etc/passwd:/etc/passwd:ro
       - /etc/group:/etc/group:ro
 
