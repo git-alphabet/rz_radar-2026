@@ -11,6 +11,21 @@ scaled_image = None
 scale_factor = 1.0
 color_mode = "green"  # 初始模式为绿色
 
+
+def get_screen_size_fallback(default_w=1920, default_h=1080):
+    """尽量获取屏幕分辨率，失败时使用默认值。"""
+    try:
+        import tkinter as tk
+
+        root = tk.Tk()
+        root.withdraw()
+        screen_w = root.winfo_screenwidth()
+        screen_h = root.winfo_screenheight()
+        root.destroy()
+        return screen_w, screen_h
+    except Exception:
+        return default_w, default_h
+
 # 鼠标回调函数
 def mouse_callback(event, x, y, flags, param):
     global drawing, current_points, mask_image, scaled_image, color_mode, scale_factor
@@ -53,23 +68,28 @@ def create_irregular_mask(image_path):
         print("Failed to load image.")
         return
 
-    # 设置缩放比例，目标宽度为 500 像素
-    target_width = 500
+    # 根据屏幕分辨率自动缩放，避免窗口超出屏幕
     h, w = original_image.shape[:2]
-    scale_factor = target_width / w
-    scaled_image = cv2.resize(original_image, (target_width, int(h * scale_factor)))
+    screen_w, screen_h = get_screen_size_fallback()
+    max_preview_w = int(screen_w * 0.85)
+    max_preview_h = int(screen_h * 0.85)
+    scale_factor = min(max_preview_w / w, max_preview_h / h, 1.0)
+    scaled_w, scaled_h = int(w * scale_factor), int(h * scale_factor)
+    scaled_image = cv2.resize(original_image, (scaled_w, scaled_h))
 
     # 创建黑色掩码图像
     mask_image = np.zeros_like(original_image, dtype=np.uint8)
 
     # 创建窗口并绑定鼠标事件
-    cv2.namedWindow("Image")
+    cv2.namedWindow("Image", cv2.WINDOW_NORMAL)
+    cv2.resizeWindow("Image", scaled_w, scaled_h)
     cv2.setMouseCallback("Image", mouse_callback)
 
     print("Instructions:")
     print("1. Click and drag to define a region (release to finish).")
     print("2. Press 'n' to switch to the next region color (green -> blue).")
     print("3. Press 'q' to quit and save the mask.")
+    print(f"Preview size: {scaled_w}x{scaled_h}, scale_factor={scale_factor:.3f}")
 
     while True:
         # 显示当前图像
@@ -92,4 +112,4 @@ def create_irregular_mask(image_path):
 # 使用示例
 if __name__ == "__main__":
     # 替换为你的图像路径
-    create_irregular_mask("images-2025/map_blue.jpg")
+    create_irregular_mask("map_custom_vertical.jpg")

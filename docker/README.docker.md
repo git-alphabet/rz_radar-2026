@@ -43,8 +43,50 @@ sudo udevadm trigger
 ```bash
 set -a && source .env && set +a
 export LOCAL_UID=$(id -u) LOCAL_GID=$(id -g)
-docker compose --project-directory . -f docker/compose.dev.yml up -d
+docker compose -f docker/compose.dev.yml up -d
 ```
+
+当前 `compose.dev.yml` 采用“root 启动初始化 → 非 root 执行业务”的流程：
+
+- root 阶段：写入 `usbfs_memory_mb`、预创建并修正 `/workspace/images`、`/workspace/MvSdkLog` 目录权限。
+- 业务阶段：默认保持 root（符合 VS Code 右键 `Compose Up` 习惯）。
+
+推荐命令（仅在“会生成宿主机文件”的操作时切普通用户）：
+
+```bash
+# 默认（排障/初始化/调试）
+docker compose -f docker/compose.dev.yml exec --user root radar bash
+
+# 仅在生成文件时使用宿主机用户，避免 root 锁文件
+docker compose -f docker/compose.dev.yml exec --user $(id -u):$(id -g) radar bash
+python main.py
+```
+
+如果你不想每次手写 `--user`，可直接使用 `compose.dev.yml` 内置的 `radar_user`（profile: `user`）：
+
+```bash
+set -a && source .env && set +a
+export LOCAL_UID=$(id -u) LOCAL_GID=$(id -g)
+docker compose -f docker/compose.dev.yml --profile user run --rm radar_user python perspective_warp.py
+```
+
+这个方式的特点：
+
+- 默认 `Compose Up` 仍然是 root（符合你的日常调试习惯）
+- 仅脚本执行阶段用普通用户，生成文件直接归属宿主机当前用户
+- 不需要改业务脚本内容
+
+如果你平时已经在容器 root 终端里工作，最短命令是：
+
+```bash
+bash /workspace/docker/run_as_local_user.sh python perspective_warp.py
+```
+
+说明：
+
+- 平时调试仍用 root（不变）
+- 只有这条命令会以 `LOCAL_UID:LOCAL_GID` 执行
+- 生成的文件会直接归宿主机当前用户
 
 当前 `compose.dev.yml` 已包含：
 

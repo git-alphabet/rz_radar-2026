@@ -18,7 +18,7 @@ import yaml
 
 
 
-INPUT_IMAGE   = "images/image.png"        # 拍的图片路径
+INPUT_IMAGE   = "images/1.jpg"        # 拍的图片路径
 OUTPUT_IMAGE_VERTICAL   = "map_custom_vertical.jpg"    # 输出竖图（长边竖向）
 OUTPUT_IMAGE_HORIZONTAL = "map_custom_horizontal.jpg"  # 输出横图（长边横向）
 
@@ -30,11 +30,17 @@ PROJECT_FIELD_WIDTH_CM = 2800.0
 PROJECT_FIELD_HEIGHT_CM = 1500.0
 
 # 当前要裁切区域的实测尺寸（cm）
-MEASURED_GROUND_WIDTH_CM = 79.6
-MEASURED_GROUND_HEIGHT_CM = 79.6
+MEASURED_GROUND_WIDTH_CM = 420.0
+MEASURED_GROUND_HEIGHT_CM = 166.0
 
 # 在“按项目基准换算”的基础上整体放大，提升清晰度（保持比例不变）
 OUTPUT_UPSCALE = 10.0
+
+# 输出镜像模式：none / horizontal / vertical / both
+MIRROR_MODE = "horizontal"
+
+# 是否对横图额外旋转 180°（用于单独修正 warp_horizontal 方向）
+HORIZONTAL_EXTRA_ROTATE_180 = True
 
 MIN_OUTPUT_SIDE_PX = 2
 
@@ -97,6 +103,24 @@ def warp_image(img, quad_orig, out_w, out_h):
 def make_portrait_from_landscape(img_landscape):
     """由横图生成竖图（逆时针旋转 90°）。"""
     return cv2.rotate(img_landscape, cv2.ROTATE_90_COUNTERCLOCKWISE)
+
+
+def rotate_180(img):
+    """图像旋转 180°。"""
+    return cv2.rotate(img, cv2.ROTATE_180)
+
+
+def mirror_image(img, mode="horizontal"):
+    """按模式镜像图像。"""
+    if mode == "none":
+        return img
+    if mode == "horizontal":
+        return cv2.flip(img, 1)
+    if mode == "vertical":
+        return cv2.flip(img, 0)
+    if mode == "both":
+        return cv2.flip(img, -1)
+    return img
 
 
 def draw_overlay(canvas, points, scale, output_width_px, output_height_px, hover=None):
@@ -176,8 +200,15 @@ def main():
     def apply_warp():
         nonlocal warped_horizontal, warped_vertical
         quad_orig = np.array(points_disp, dtype=np.float32) / scale  # 映射回原图坐标（按点击顺序）
-        warped_horizontal = warp_image(img_orig, quad_orig, output_width_px, output_height_px)
-        warped_vertical = make_portrait_from_landscape(warped_horizontal)
+        warped_horizontal_raw = warp_image(img_orig, quad_orig, output_width_px, output_height_px)
+        warped_vertical_raw = make_portrait_from_landscape(warped_horizontal_raw)
+
+        # 两个输出都在原有基础上旋转 180°（预览与保存一致）
+        warped_horizontal = mirror_image(rotate_180(warped_horizontal_raw), MIRROR_MODE)
+        warped_vertical = mirror_image(rotate_180(warped_vertical_raw), MIRROR_MODE)
+
+        if HORIZONTAL_EXTRA_ROTATE_180:
+            warped_horizontal = rotate_180(warped_horizontal)
 
         # 横图预览
         ws_h = min(1200 / output_width_px, 700 / output_height_px, 1.0)
