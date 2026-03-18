@@ -60,6 +60,33 @@ if config['filter']['type'] == 'sliding_window':
     assert 1 <= config['filter']['sliding_window']['window_size'] <= 20, "滑动窗口大小应在1-20之间"
 # 图像测试模式（获取图像根据自己的设备，在）
 camera_mode = config['global']['camera_mode']  # 'test':测试模式,'hik':海康相机,'video':USB相机（videocapture）
+camera_flip = bool(config['global'].get('camera_flip', False))
+
+
+class RateLimitedLogger:
+    def __init__(self, interval_sec=1.0):
+        self.interval_sec = interval_sec
+        self._last_log_ts = {}
+
+    def log(self, key, message, force=False):
+        now = time.time()
+        last_ts = self._last_log_ts.get(key, 0.0)
+        if force or now - last_ts >= self.interval_sec:
+            print(message)
+            self._last_log_ts[key] = now
+
+
+log_limiter = RateLimitedLogger(interval_sec=1.0)
+
+
+def process_camera_frame(frame):
+    if frame is None:
+        return None
+    if camera_flip:
+        return cv2.rotate(frame, cv2.ROTATE_180)
+    return frame
+
+
 if config['global']['use_serial']:
     try:
         ser1 = serial.Serial(
@@ -480,55 +507,140 @@ def hik_camera_get():
     set_image_Node_num(cam, Num=3)
     set_grab_strategy(cam, grabstrategy=1)
 
+    def _alloc_payload_buffer():
+        st_param = MVCC_INTVALUE_EX()
+        memset(byref(st_param), 0, sizeof(MVCC_INTVALUE_EX))
+        ret_payload = cam.MV_CC_GetIntValueEx("PayloadSize", st_param)
+        if ret_payload != 0:
+            return ret_payload, None, None
+        payload_size = st_param.nCurValue
+        return 0, payload_size, (c_ubyte * payload_size)()
+
+    def _start_grabbing_with_reopen():
+        cam.MV_CC_StopGrabbing()
+        cam.MV_CC_CloseDevice()
+
+        ret_open = cam.MV_CC_OpenDevice(MV_ACCESS_Exclusive, 0)
+        if ret_open != 0:
+            return ret_open, "open device"
+
+        set_Value(cam, param_type="float_value", node_name="ExposureTime",
+                  node_value=config['camera_params']['exposure_time'])
+        set_Value(cam, param_type="float_value", node_name="Gain", node_value=config['camera_params']['gain'])
+
+        ret_trigger = cam.MV_CC_SetEnumValue("TriggerMode", 0)
+        if ret_trigger != 0:
+            log_limiter.log("hik_triggermode", "warning: TriggerMode 设置失败, ret[0x%x]" % ret_trigger)
+
+        set_image_Node_num(cam, Num=3)
+        set_grab_strategy(cam, grabstrategy=1)
+
+        ret_start = cam.MV_CC_StartGrabbing()
+        if ret_start != 0:
+            return ret_start, "start grabbing"
+
+        return 0, "ok"
+
     # 开启设备取流
     start_grab_and_get_data_size(cam)
     # 主动取流方式抓取图像
-    stParam = MVCC_INTVALUE_EX()
-
-    memset(byref(stParam), 0, sizeof(MVCC_INTVALUE_EX))
-    ret = cam.MV_CC_GetIntValueEx("PayloadSize", stParam)
+    ret, nDataSize, pData = _alloc_payload_buffer()
     if ret != 0:
         print("get payload size fail! ret[0x%x]" % ret)
         sys.exit()
-    nDataSize = stParam.nCurValue
-    pData = (c_ubyte * nDataSize)()
-    stFrameInfo = MV_FRAME_OUT_INFO_EX()
 
+    stFrameInfo = MV_FRAME_OUT_INFO_EX()
     memset(byref(stFrameInfo), 0, sizeof(stFrameInfo))
     timeout_count = 0
+    no_data_count = 0
+    restart_fail_count = 0
     last_ok_ts = time.time()
+    mv_e_nodata = 0x80000007
+
     while True:
         ret = cam.MV_CC_GetOneFrameTimeout(pData, nDataSize, stFrameInfo, 300)
         if ret == 0:
             image = np.asarray(pData)
             # 处理海康相机的图像格式为OPENCV处理的格式
-            camera_image = image_control(data=image, stFrameInfo=stFrameInfo)
+            camera_image = process_camera_frame(image_control(data=image, stFrameInfo=stFrameInfo))
             timeout_count = 0
+            no_data_count = 0
+            restart_fail_count = 0
             last_ok_ts = time.time()
         else:
             timeout_count += 1
-            if timeout_count % 20 == 0:
-                print("camera timeout ret[0x%x], count=%d" % (ret, timeout_count))
+            if ret == mv_e_nodata:
+                no_data_count += 1
+
+            log_limiter.log("hik_timeout", "camera timeout ret[0x%x], count=%d" % (ret, timeout_count))
 
             if timeout_count >= 60 and time.time() - last_ok_ts > 2.0:
-                print("camera stream stalled, try restart grabbing")
+                log_limiter.log("hik_stalled", "camera stream stalled, try restart grabbing")
                 cam.MV_CC_StopGrabbing()
                 ret_restart = cam.MV_CC_StartGrabbing()
                 if ret_restart != 0:
-                    print("restart grabbing failed ret[0x%x]" % ret_restart)
+                    restart_fail_count += 1
+                    log_limiter.log(
+                        "hik_restart_failed",
+                        "restart grabbing failed ret[0x%x], fail_count=%d" % (ret_restart, restart_fail_count)
+                    )
+
+                    if restart_fail_count >= 3 or no_data_count >= 120:
+                        log_limiter.log(
+                            "hik_reopen",
+                            "camera no data while device online suspected, try reopen device"
+                        )
+                        ret_reopen, stage = _start_grabbing_with_reopen()
+                        if ret_reopen != 0:
+                            log_limiter.log(
+                                "hik_reopen_failed",
+                                "reopen camera failed at %s ret[0x%x]" % (stage, ret_reopen)
+                            )
+                        else:
+                            ret_payload, payload_size, payload_data = _alloc_payload_buffer()
+                            if ret_payload != 0:
+                                log_limiter.log(
+                                    "hik_payload_failed",
+                                    "get payload size after reopen failed ret[0x%x]" % ret_payload
+                                )
+                            else:
+                                nDataSize = payload_size
+                                pData = payload_data
+                                timeout_count = 0
+                                no_data_count = 0
+                                restart_fail_count = 0
+                                last_ok_ts = time.time()
                 else:
                     timeout_count = 0
+                    no_data_count = 0
                     last_ok_ts = time.time()
 
 
 def video_capture_get():
     global camera_image
     cam = cv2.VideoCapture(0)
+    last_ok_ts = time.time()
+
     while True:
+        if not cam.isOpened():
+            log_limiter.log("video_closed", "video stream closed, try reopen VideoCapture")
+            cam.release()
+            time.sleep(0.2)
+            cam = cv2.VideoCapture(0)
+            continue
+
         ret, img = cam.read()
-        if ret:
-            camera_image = img
+        if ret and img is not None:
+            camera_image = process_camera_frame(img)
+            last_ok_ts = time.time()
             time.sleep(0.016)  # 60fps
+        else:
+            log_limiter.log("video_nodata", "video no data, waiting/retrying")
+            if time.time() - last_ok_ts > 2.0:
+                cam.release()
+                time.sleep(0.2)
+                cam = cv2.VideoCapture(0)
+                last_ok_ts = time.time()
 
 
 # 串口发送线程
@@ -930,7 +1042,7 @@ else:
 camera_image = None
 
 if camera_mode == 'test':
-    camera_image = cv2.imread('images/test_image.jpg')
+    camera_image = process_camera_frame(cv2.imread('images/test_image.jpg'))
 elif camera_mode == 'hik':
     # 海康相机图像获取线程
     thread_camera = threading.Thread(target=hik_camera_get, daemon=True)
@@ -1044,7 +1156,8 @@ while True:
 
     te = time.time()
     t_p = te - ts
-    print("fps:", 1 / t_p)  # 打印帧率
+    if t_p > 0:
+        log_limiter.log("main_fps", f"fps: {1 / t_p:.3f}")
     # 绘制UI
     _ = draw_information_ui(vulnerability, state, information_ui_show)
     cv2.putText(information_ui_show, "vulnerability_chances: " + str(double_vulnerability_chance),

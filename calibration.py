@@ -22,6 +22,16 @@ import yaml
 with open("config.yaml", "r", encoding="utf-8") as f:  # 指定 UTF-8 编码
     config = yaml.safe_load(f)
 
+camera_flip = bool(config['global'].get('camera_flip', False))
+
+
+def process_camera_frame(frame):
+    if frame is None:
+        return None
+    if camera_flip:
+        return cv2.rotate(frame, cv2.ROTATE_180)
+    return frame
+
 # 海康相机图像获取线程
 def hik_camera_get():
     # 获得设备信息
@@ -129,7 +139,7 @@ def hik_camera_get():
         if ret == 0:
             image = np.asarray(pData)
             # 处理海康相机的图像格式为OPENCV处理的格式
-            camera_image = image_control(data=image, stFrameInfo=stFrameInfo)
+            camera_image = process_camera_frame(image_control(data=image, stFrameInfo=stFrameInfo))
         else:
             print("no data[0x%x]" % ret)
 
@@ -140,7 +150,7 @@ def video_capture_get():
     while True:
         ret, img = cam.read()
         if ret:
-            camera_image = img
+            camera_image = process_camera_frame(img)
             time.sleep(0.016)  # 60fps
 
 
@@ -414,7 +424,7 @@ if __name__ == '__main__':
     state = config['global']['state']  # R:红方/B:蓝方
 
     if camera_mode == 'test':
-        camera_image = cv2.imread('images/test_image.jpg')
+        camera_image = process_camera_frame(cv2.imread('images/test_image.jpg'))
     elif camera_mode == 'hik':
         # 海康相机图像获取线程
         thread_camera = threading.Thread(target=hik_camera_get, daemon=True)
