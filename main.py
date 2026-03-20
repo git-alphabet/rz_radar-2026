@@ -119,6 +119,20 @@ map_backup = cv2.imread(config['paths']['map_images']['backup'])
 M_ground = loaded_arrays[0]  # 地面层、公路层
 M_height_r = loaded_arrays[1]  # 中央高地
 
+
+def _is_valid_perspective_matrix(matrix):
+    if matrix is None or matrix.shape != (3, 3):
+        return False
+    invalid_pattern = np.array([[0.0, 0.0, 0.0],
+                                [0.0, 0.0, 0.0],
+                                [0.0, 0.0, 1.0]], dtype=np.float32)
+    return not np.allclose(matrix.astype(np.float32), invalid_pattern)
+
+
+has_valid_height_matrix = _is_valid_perspective_matrix(M_height_r)
+if not has_valid_height_matrix:
+    print("warning: 高地仿射矩阵无效，将回退使用地面层仿射结果")
+
 # 确定地图画面像素，保证不会溢出
 height, width = mask_image.shape[:2]
 height -= 1
@@ -404,6 +418,9 @@ def project_to_map(camera_point):
     if color[0] == color[1] == color[2] == 0:
         return x_c, y_c
 
+    if not has_valid_height_matrix:
+        return x_c, y_c
+
     mapped_point = cv2.perspectiveTransform(camera_point.reshape(1, 1, 2), M_height_r)
     x_c = max(int(mapped_point[0][0][0]), 0)
     y_c = max(int(mapped_point[0][0][1]), 0)
@@ -674,10 +691,10 @@ def ser_send():
     def send_point_B(send_name, all_filter_data):
         # front_time = time.time()
         # 转换为地图坐标系
-        filtered_xyz = (2800 - all_filter_data[send_name][1], all_filter_data[send_name][0])
+        filtered_xyz = (map_backup.shape[1] - all_filter_data[send_name][1], all_filter_data[send_name][0])
         # 转换为裁判系统单位M
         ser_x = int(filtered_xyz[0]) * 10 / 10
-        ser_y = int(1500 - filtered_xyz[1]) * 10 / 10
+        ser_y = int(map_backup.shape[0] - filtered_xyz[1]) * 10 / 10
         # 打包坐标数据包
         # data = build_data_radar(mapping_table.get(send_name), ser_x, ser_y)
         # packet, seq_s = build_send_packet(data, seq_s, [0x03, 0x05])
@@ -693,10 +710,10 @@ def ser_send():
     def send_point_R(send_name, all_filter_data):
         # front_time = time.time()
         # 转换为地图坐标系
-        filtered_xyz = (all_filter_data[send_name][1], 1500 - all_filter_data[send_name][0])
+        filtered_xyz = (all_filter_data[send_name][1], map_backup.shape[0] - all_filter_data[send_name][0])
         # 转换为裁判系统单位M
         ser_x = int(filtered_xyz[0]) * 10 / 10
-        ser_y = int(1500 - filtered_xyz[1]) * 10 / 10
+        ser_y = int(map_backup.shape[0] - filtered_xyz[1]) * 10 / 10
         # 打包坐标数据包
         # data = build_data_radar(mapping_table.get(send_name), ser_x, ser_y)
         # packet, seq_s = build_send_packet(data, seq_s, [0x03, 0x05])
@@ -1083,7 +1100,6 @@ while True:
 
             generic_camera_point = np.array([[[min(left + 0.5 * w, img_x), min(top + h, img_y)]]], dtype=np.float32)
             X_car, Y_car = project_to_map(generic_camera_point)
-            generic_car_points.append((X_car, Y_car))
 
             # 存储第一次检测结果和区域
             # ROI出机器人区域
@@ -1092,13 +1108,15 @@ while True:
             # 第二层神经网络识别
             result_n = detector_next.predict(cropped_img)
             det_time += 1
+            has_valid_side_label = False
             if result_n:
                 # 叠加第二次检测结果到原图的对应位置
                 img0[top:top + h, left:left + w] = cropped_img
 
                 for detection1 in result_n:
                     cls, xywh, conf = detection1
-                    if cls:  # 所有装甲板都处理，可选择屏蔽一些:
+                    if cls in mapping_table and cls[0] in ('R', 'B'):
+                        has_valid_side_label = True
                         # print(cls)
                         x, y, w, h = xywh
                         x = x + left
@@ -1117,6 +1135,9 @@ while True:
                             # 卡尔曼滤波直接更新
                             filter.add_data(cls, X_M, Y_M)
 
+            if not has_valid_side_label:
+                generic_car_points.append((X_car, Y_car))
+
     # 获取所有识别到的机器人坐标
     all_filter_data = filter.get_all_data()
     # print(all_filter_data_name)
@@ -1129,9 +1150,9 @@ while True:
                 else:
                     color_m = (255, 0, 0)
                 if state == 'R':
-                    filtered_xyz = (2800 - xyxy[1], xyxy[0])  # 缩放坐标到地图图像
+                    filtered_xyz = (map_backup.shape[1] - xyxy[1], xyxy[0])  # 竖图坐标转横图显示
                 else:
-                    filtered_xyz = (xyxy[1], 1500 - xyxy[0])  # 缩放坐标到地图图像
+                    filtered_xyz = (xyxy[1], map_backup.shape[0] - xyxy[0])  # 竖图坐标转横图显示
                 # 只绘制敌方阵营的机器人（这里不会绘制盲区预测的机器人）
                 if name[0] != state:
                     cv2.circle(map, (int(filtered_xyz[0]), int(filtered_xyz[1])), 15, color_m, -1)  # 绘制圆
@@ -1139,20 +1160,24 @@ while True:
                                 (int(filtered_xyz[0]) - 5, int(filtered_xyz[1]) + 5),
                                 cv2.FONT_HERSHEY_SIMPLEX, 2.5, (255, 255, 255), 5)
                     ser_x = int(filtered_xyz[0]) * 10 / 10
-                    ser_y = int(1500 - filtered_xyz[1]) * 10 / 10
+                    ser_y = int(map_backup.shape[0] - filtered_xyz[1]) * 10 / 10
                     cv2.putText(map, "(" + str(ser_x) + "," + str(ser_y) + ")",
                                 (int(filtered_xyz[0]) - 100, int(filtered_xyz[1]) + 60),
                                 cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 255, 255), 4)
 
     for car_point in generic_car_points:
         if state == 'R':
-            generic_xyz = (2800 - car_point[1], car_point[0])
+            generic_xyz = (map_backup.shape[1] - car_point[1], car_point[0])
         else:
-            generic_xyz = (car_point[1], 1500 - car_point[0])
+            generic_xyz = (car_point[1], map_backup.shape[0] - car_point[0])
         cv2.circle(map, (int(generic_xyz[0]), int(generic_xyz[1])), 10, (0, 255, 255), -1)
         cv2.putText(map, "CAR",
                     (int(generic_xyz[0]) + 12, int(generic_xyz[1]) + 5),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+
+    if generic_car_points:
+        car_coords = [(int(point[0]), int(point[1])) for point in generic_car_points]
+        log_limiter.log("car_coords", f"CAR坐标: {car_coords}")
 
     te = time.time()
     t_p = te - ts
