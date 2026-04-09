@@ -15,13 +15,12 @@ services:
       - ../.env
     working_dir: /workspace
     environment:
-      DOCKER_HUB_USER: ${DOCKER_HUB_USER:-}
-      IMAGE_NAME: ${IMAGE_NAME:-}
       TARGET_CONTAINER: ${TARGET_CONTAINER:-docker-radar-1}
       SNAPSHOT_TAG: ${SNAPSHOT_TAG:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ..:/workspace:rw
+      - ${HOME}/.docker:/root/.docker:ro
     entrypoint:
       - /bin/sh
       - -lc
