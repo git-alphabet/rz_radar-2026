@@ -102,46 +102,38 @@ def build_data_radar(target_robot_id, target_position_x, target_position_y):
     return data
 
 
-# 雷达数据部分构建示例
-def build_data_radar_all(send_map,state):
-    if state == 'R':
-        data = bytearray()
-        data.extend(bytearray(struct.pack('H', int(send_map['B1'][0]))))  # x坐标 (小端)
-        data.extend(bytearray(struct.pack('H', int(send_map['B1'][1]))))  # y坐标 (小端)
+def _append_robot_position(data, pos_x, pos_y):
+    data.extend(bytearray(struct.pack('<H', max(0, min(0xFFFF, int(pos_x))))))
+    data.extend(bytearray(struct.pack('<H', max(0, min(0xFFFF, int(pos_y))))))
 
-        data.extend(bytearray(struct.pack('H', int(send_map['B2'][0]))))  # x坐标 (小端)
-        data.extend(bytearray(struct.pack('H', int(send_map['B2'][1]))))  # y坐标 (小端)
 
-        data.extend(bytearray(struct.pack('H', int(send_map['B3'][0]))))  # x坐标 (小端)
-        data.extend(bytearray(struct.pack('H', int(send_map['B3'][1]))))  # y坐标 (小端)
+# 0x0A01 对方机器人坐标字段顺序：1,2,3,4,6,7
+def build_data_radar_all(send_map, state):
+    data = bytearray()
+    enemy_prefix = 'B' if state == 'R' else 'R'
+    for robot_index in ('1', '2', '3', '4', '6', '7'):
+        robot_name = f"{enemy_prefix}{robot_index}"
+        pos_x, pos_y = send_map.get(robot_name, (0, 0))
+        _append_robot_position(data, pos_x, pos_y)
 
-        data.extend(bytearray(struct.pack('H', int(send_map['B4'][0]))))  # x坐标 (小端)
-        data.extend(bytearray(struct.pack('H', int(send_map['B4'][1]))))  # y坐标 (小端)
+    return data
 
-        data.extend(bytearray(struct.pack('H', int(send_map['B5'][0]))))  # x坐标 (小端)
-        data.extend(bytearray(struct.pack('H', int(send_map['B5'][1]))))  # y坐标 (小端)
 
-        data.extend(bytearray(struct.pack('H', int(send_map['B7'][0]))))  # x坐标 (小端)
-        data.extend(bytearray(struct.pack('H', int(send_map['B7'][1]))))  # y坐标 (小端)
-    else:
-        data = bytearray()
-        data.extend(bytearray(struct.pack('H', int(send_map['R1'][0]))))  # x坐标 (小端)
-        data.extend(bytearray(struct.pack('H', int(send_map['R1'][1]))))  # y坐标 (小端)
+# 0x0305 map_robot_data_t 字段顺序：对方1,2,3,4,6,7 + 己方1,2,3,4,6,7
+def build_data_map_robot(send_map, state):
+    data = bytearray()
+    enemy_prefix = 'B' if state == 'R' else 'R'
+    ally_prefix = 'R' if state == 'R' else 'B'
 
-        data.extend(bytearray(struct.pack('H', int(send_map['R2'][0]))))  # x坐标 (小端)
-        data.extend(bytearray(struct.pack('H', int(send_map['R2'][1]))))  # y坐标 (小端)
+    for robot_index in ('1', '2', '3', '4', '6', '7'):
+        robot_name = f"{enemy_prefix}{robot_index}"
+        pos_x, pos_y = send_map.get(robot_name, (0, 0))
+        _append_robot_position(data, pos_x, pos_y)
 
-        data.extend(bytearray(struct.pack('H', int(send_map['R3'][0]))))  # x坐标 (小端)
-        data.extend(bytearray(struct.pack('H', int(send_map['R3'][1]))))  # y坐标 (小端)
-
-        data.extend(bytearray(struct.pack('H', int(send_map['R4'][0]))))  # x坐标 (小端)
-        data.extend(bytearray(struct.pack('H', int(send_map['R4'][1]))))  # y坐标 (小端)
-
-        data.extend(bytearray(struct.pack('H', int(send_map['R5'][0]))))  # x坐标 (小端)
-        data.extend(bytearray(struct.pack('H', int(send_map['R5'][1]))))  # y坐标 (小端)
-
-        data.extend(bytearray(struct.pack('H', int(send_map['R7'][0]))))  # x坐标 (小端)
-        data.extend(bytearray(struct.pack('H', int(send_map['R7'][1]))))  # y坐标 (小端)
+    for robot_index in ('1', '2', '3', '4', '6', '7'):
+        robot_name = f"{ally_prefix}{robot_index}"
+        pos_x, pos_y = send_map.get(robot_name, (0, 0))
+        _append_robot_position(data, pos_x, pos_y)
 
     return data
 

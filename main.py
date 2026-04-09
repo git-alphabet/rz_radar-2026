@@ -23,10 +23,14 @@ import cv2
 import numpy as np
 from detect_function import YOLOv5Detector
 from RM_serial_py.ser_api import build_send_packet, receive_packet, Radar_decision, \
-    build_data_decision, build_data_radar_all, build_data_gimbaler_client
+    build_data_decision, build_data_radar_all, build_data_map_robot, build_data_gimbaler_client
 import yaml
 with open("config.yaml", "r", encoding="utf-8") as f:  # 指定 UTF-8 编码
     config = yaml.safe_load(f)
+
+
+RADAR_POS_CMD_ID = [0x0A, 0x01]
+RADAR_MINIMAP_CMD_ID = [0x03, 0x05]
 
 
 state = config['global']['state']  # R:红方/B:蓝方
@@ -685,8 +689,13 @@ def ser_send():
                         send_map['R7'] = send_point_R('R7', all_filter_data)
 
             ser_data = build_data_radar_all(send_map, state)
-            packet, seq = build_send_packet(ser_data, seq, [0x03, 0x05])
+            packet, seq = build_send_packet(ser_data, seq, RADAR_POS_CMD_ID)
             ser1.write(packet)
+
+            minimap_data = build_data_map_robot(send_map, state)
+            minimap_packet, seq = build_send_packet(minimap_data, seq, RADAR_MINIMAP_CMD_ID)
+            ser1.write(minimap_packet)
+
             time.sleep(0.2)
             print(send_map, seq)
             # 超过单点预测时间上限，更新上次预测的进度
