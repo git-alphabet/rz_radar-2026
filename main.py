@@ -159,6 +159,11 @@ mapping_table = {
     "B7": 107
 }
 
+ALL_GROUND_ROBOTS = (
+    "R1", "R2", "R3", "R4", "R5", "R6", "R7",
+    "B1", "B2", "B3", "B4", "B5", "B6", "B7"
+)
+
 # 盲区预测点位
 guess_table = {}
 for robot, points in config['blind_zone']['points'].items():
@@ -576,29 +581,27 @@ def ser_send():
     target_last = 0  # 上一帧的飞镖目标
     update_time = 0  # 上次预测点更新时间
     send_count = 0  # 信道占用数，上限为4
-    send_map = {
-        "R1": (0, 0),
-        "R2": (0, 0),
-        "R3": (0, 0),
-        "R4": (0, 0),
-        "R5": (0, 0),
-        "R6": (0, 0),
-        "R7": (0, 0),
-        "B1": (0, 0),
-        "B2": (0, 0),
-        "B3": (0, 0),
-        "B4": (0, 0),
-        "B5": (0, 0),
-        "B6": (0, 0),
-        "B7": (0, 0)
-    }
+    send_map_template = {name: (0, 0) for name in ALL_GROUND_ROBOTS}
+
+    def update_send_map_by_detection(send_map, all_filter_data):
+        # 先把双方识别结果都同步到 send_map（裁判协议最终仍按 state 取对应字段）
+        for robot_name in ALL_GROUND_ROBOTS:
+            if not all_filter_data.get(robot_name, False):
+                continue
+            if robot_name[0] == 'B':
+                send_map[robot_name] = send_point_B(robot_name, all_filter_data)
+            else:
+                send_map[robot_name] = send_point_R(robot_name, all_filter_data)
+
     while True:
 
         guess_time_limit = config['blind_zone']['base_time'] + config['blind_zone']['offset_time']  # 单位：秒，根据上一帧的信道占用数动态调整单点预测时间
         # print(guess_time_limit)
         send_count = 0  # 重置信道占用数
         try:
+            send_map = send_map_template.copy()
             all_filter_data = filter.get_all_data()
+            update_send_map_by_detection(send_map, all_filter_data)
             if state == 'R':
                 if not guess_list.get('B1'):
                     if all_filter_data.get('B1', False):
@@ -990,17 +993,15 @@ while True:
                     filtered_xyz = (2800 - xyxy[1], xyxy[0])  # 缩放坐标到地图图像
                 else:
                     filtered_xyz = (xyxy[1], 1500 - xyxy[0])  # 缩放坐标到地图图像
-                # 只绘制敌方阵营的机器人（这里不会绘制盲区预测的机器人）
-                if name[0] != state:
-                    cv2.circle(map, (int(filtered_xyz[0]), int(filtered_xyz[1])), 15, color_m, -1)  # 绘制圆
-                    cv2.putText(map, str(name),
-                                (int(filtered_xyz[0]) - 5, int(filtered_xyz[1]) + 5),
-                                cv2.FONT_HERSHEY_SIMPLEX, 2.5, (255, 255, 255), 5)
-                    ser_x = int(filtered_xyz[0]) * 10 / 10
-                    ser_y = int(1500 - filtered_xyz[1]) * 10 / 10
-                    cv2.putText(map, "(" + str(ser_x) + "," + str(ser_y) + ")",
-                                (int(filtered_xyz[0]) - 100, int(filtered_xyz[1]) + 60),
-                                cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 255, 255), 4)
+                cv2.circle(map, (int(filtered_xyz[0]), int(filtered_xyz[1])), 15, color_m, -1)  # 绘制圆
+                cv2.putText(map, str(name),
+                            (int(filtered_xyz[0]) - 5, int(filtered_xyz[1]) + 5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 2.5, (255, 255, 255), 5)
+                ser_x = int(filtered_xyz[0]) * 10 / 10
+                ser_y = int(1500 - filtered_xyz[1]) * 10 / 10
+                cv2.putText(map, "(" + str(ser_x) + "," + str(ser_y) + ")",
+                            (int(filtered_xyz[0]) - 100, int(filtered_xyz[1]) + 60),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 255, 255), 4)
 
     te = time.time()
     t_p = te - ts
