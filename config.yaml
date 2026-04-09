@@ -35,6 +35,7 @@ paths:
 camera_params:
   exposure_time: 16000.0 # 曝光时间
   gain: 10.9 # 增益值
+  flip_mode: 'none' # 相机反转模式: none/horizontal/vertical/both
 
 kalman:
   process_noise: 1e-5

@@ -51,6 +51,25 @@ else:
     ser1 = None
     print("串口功能已禁用")
 save_img = config['global']['save_img']
+flip_code_map = {
+    'none': None,
+    'horizontal': 1,
+    'vertical': 0,
+    'both': -1,
+}
+camera_flip_mode = str(config.get('camera_params', {}).get('flip_mode', 'none')).lower()
+if camera_flip_mode not in flip_code_map:
+    print(f"Invalid camera flip mode: {camera_flip_mode}, fallback to none")
+    camera_flip_mode = 'none'
+
+
+def apply_camera_flip(frame):
+    if frame is None:
+        return None
+    flip_code = flip_code_map[camera_flip_mode]
+    if flip_code is None:
+        return frame
+    return cv2.flip(frame, flip_code)
 
 # 文件路径配置
 if state == 'R':
@@ -449,7 +468,7 @@ def hik_camera_get():
         if ret == 0:
             image = np.asarray(pData)
             # 处理海康相机的图像格式为OPENCV处理的格式
-            camera_image = image_control(data=image, stFrameInfo=stFrameInfo)
+            camera_image = apply_camera_flip(image_control(data=image, stFrameInfo=stFrameInfo))
         else:
             print("no data[0x%x]" % ret)
 
@@ -460,7 +479,7 @@ def video_capture_get():
     while True:
         ret, img = cam.read()
         if ret:
-            camera_image = img
+            camera_image = apply_camera_flip(img)
             time.sleep(0.016)  # 60fps
 
 
@@ -863,7 +882,7 @@ else:
 camera_image = None
 
 if camera_mode == 'test':
-    camera_image = cv2.imread('images/test_image.jpg')
+    camera_image = apply_camera_flip(cv2.imread('images/test_image.jpg'))
 elif camera_mode == 'hik':
     # 海康相机图像获取线程
     thread_camera = threading.Thread(target=hik_camera_get, daemon=True)
