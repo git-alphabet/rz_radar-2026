@@ -25,6 +25,8 @@ from detect_function import YOLOv5Detector
 from RM_serial_py.ser_api import build_send_packet, receive_packet, Radar_decision, \
     build_data_decision, build_data_radar_all, build_data_gimbaler_client
 import yaml
+
+from radio_py import data_parse, radio_recv
 with open("config.yaml", "r", encoding="utf-8") as f:  # 指定 UTF-8 编码
     config = yaml.safe_load(f)
 
@@ -853,12 +855,18 @@ if config['global']['use_serial']:
 else:
     print("跳过串口接收线程初始化")
 
+# 无线电接收线程
+if config['global']['use_radio']:
+    thread_radio_receive = threading.Thread(target=radio_recv.main, daemon=True)
+    thread_radio_receive.start()
+
 # 串口发送线程
 if config['global']['use_serial']:
     thread_list = threading.Thread(target=ser_send, daemon=True)
     thread_list.start()
 else:
     print("跳过串口发送线程初始化")
+
 
 camera_image = None
 
