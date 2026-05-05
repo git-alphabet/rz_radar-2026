@@ -27,6 +27,17 @@ from comm_protocol import (
 UDP_IP = "127.0.0.1"
 UDP_PORT = 55557
 
+# 全局变量存储最新位置数据
+radio_positions = {}
+last_update_time = {}
+robot_mapping = {
+    "hero": "R1",
+    "engineer": "R2",
+    "infantry3": "R3",
+    "infantry4": "R4",
+    "aerial": "R5",
+    "sentry": "R7"
+}
 CN_NAMES = {
     "hero": "英雄",
     "engineer": "工程",
@@ -95,6 +106,12 @@ def main() -> None:
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024 * 1024)
+                    if decoded.cmd_id == 0x0A01:
+                        for key in ("hero", "engineer", "infantry3", "infantry4", "aerial", "sentry"):
+                            value = decoded.data[key]
+                            robot = robot_mapping[key]
+                            radio_positions[robot] = (value[x_cm], value[y_cm])
+                            last_update_time[robot] = time.time()
     sock.bind((args.host, args.port))
 
     print(f"监听 UDP {args.host}:{args.port}, wave={args.wave}, access={access_code.hex().upper()}")
