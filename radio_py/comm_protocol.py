@@ -16,7 +16,7 @@ import struct
 from dataclasses import dataclass
 from typing import Iterable
 
-from ser_api import Get_CRC8_Check_Sum, Get_CRC16_Check_Sum
+from RM_serial_py.ser_api import Get_CRC8_Check_Sum, Get_CRC16_Check_Sum
 
 INFO_ACCESS_CODE = bytes.fromhex("2F6F4C74B914492E")
 JAM_ACCESS_CODE = bytes.fromhex("16E8D377151C712D")
