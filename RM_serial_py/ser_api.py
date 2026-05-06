@@ -107,18 +107,6 @@ def _append_robot_position(data, pos_x, pos_y):
     data.extend(bytearray(struct.pack('<H', max(0, min(0xFFFF, int(pos_y))))))
 
 
-# 0x0A01 对方机器人坐标字段顺序：1,2,3,4,6,7
-def build_data_radar_all(send_map, state):
-    data = bytearray()
-    enemy_prefix = 'B' if state == 'R' else 'R'
-    for robot_index in ('1', '2', '3', '4', '6', '7'):
-        robot_name = f"{enemy_prefix}{robot_index}"
-        pos_x, pos_y = send_map.get(robot_name, (0, 0))
-        _append_robot_position(data, pos_x, pos_y)
-
-    return data
-
-
 # 0x0305 map_robot_data_t 字段顺序：对方1,2,3,4,6,7 + 己方1,2,3,4,6,7
 def build_data_map_robot(send_map, state):
     data = bytearray()
@@ -139,17 +127,26 @@ def build_data_map_robot(send_map, state):
 
 
 
-def build_data_decision(chances,state):
+def build_data_decision(chances, state, password_cmd=0, password=b'000000'):
+    """构建雷达自主决策指令 (0x0301 + 0x0121)
+    Args:
+        chances: 双倍易伤触发标志位 (单调递增+1)
+        state: 队伍颜色 'R'/'B'
+        password_cmd: 密钥操作 (0=无操作, 1=更新密钥, 2=验证密钥)
+        password: 6字节ASCII密钥 (默认 '000000')
+    """
     data = bytearray()
-    cmd_id = [0x01, 0x21]
-    cmd_id = bytearray([cmd_id[1], cmd_id[0]])
+    cmd_id = bytearray([0x21, 0x01])  # 子ID 0x0121
     data.extend(cmd_id)
     if state == 'R':
-        data.extend(bytearray(struct.pack('H', 9)))
+        data.extend(bytearray(struct.pack('H', 9)))   # 红方雷达ID
     else:
-        data.extend(bytearray(struct.pack('H', 109)))
-    data.extend(bytearray([0x80,0x80]))
-    data.extend(bytearray(struct.pack('B', chances)))
+        data.extend(bytearray(struct.pack('H', 109)))  # 蓝方雷达ID
+    data.extend(bytearray([0x80, 0x80]))  # 目标ID: 裁判系统服务器
+    data.extend(bytearray(struct.pack('B', chances)))       # radar_cmd
+    data.extend(bytearray(struct.pack('B', password_cmd)))  # password_cmd
+    pwd = password[:6].ljust(6, b'0')  # 确保6字节
+    data.extend(pwd)                                             # password[6]
     return data
 
 def build_data_gimbaler_client(chances, state, opponent_state):
@@ -259,22 +256,27 @@ def receive_packet(serial_data, expected_cmd_id, info):
 
 
 def Radar_decision(byte_data):
-    # 确保输入是一个字节
+    """解析雷达信息 (0x020E radar_info_t)
+    Args:
+        byte_data: 1字节雷达信息
+    Returns:
+        double_vulnerability_chance: 双倍易伤机会 (0-2)
+        opponent_double_vulnerability: 对方是否正被双倍易伤 (0/1)
+        encryption_level: 己方加密等级 (1-3)
+        key_modifiable: 是否可修改密钥 (0/1)
+    """
     if not isinstance(byte_data, int) or byte_data < 0 or byte_data > 255:
         raise ValueError("输入必须是一个字节（0-255）")
 
-    # 提取第 0-1 位的双倍易伤机会
-    double_vulnerability_chance = byte_data & 0b00000011
+    # bit0~1: 双倍易伤机会 (0~2)
+    double_vulnerability_chance = byte_data & 0x03
+    # bit2: 对方是否正被双倍易伤
+    opponent_double_vulnerability = (byte_data >> 2) & 0x01
+    # bit3~4: 己方加密等级 (1~3)
+    encryption_level = (byte_data >> 3) & 0x03
+    # bit5: 是否可修改密钥 (1=可)
+    key_modifiable = (byte_data >> 5) & 0x01
 
-    # 提取第 2 位的对方双倍易伤状态
-    opponent_double_vulnerability = (byte_data & 0b00000100) >> 2
+    return double_vulnerability_chance, opponent_double_vulnerability, encryption_level, key_modifiable
 
-    # 提取第 3-7 位（保留位，不使用）
-    reserved_bits = (byte_data & 0b11111000) >> 3
 
-    # 打印结果
-
-    # print(f"双倍易伤机会: {double_vulnerability_chance}")
-    # print(f"对方正在被触发双倍易伤: {opponent_double_vulnerability}")
-    # print(f"保留位: {reserved_bits}")
-    return double_vulnerability_chance, opponent_double_vulnerability

@@ -8,7 +8,7 @@ import threading
 import time
 from collections import deque
 import serial
-from information_ui import draw_information_ui
+from information_ui import draw_information_ui, draw_enemy_info
 from hik_camera import call_back_get_image, start_grab_and_get_data_size, close_and_destroy_device, set_Value, \
     get_Value, image_control
 import sys
@@ -23,17 +23,22 @@ import cv2
 import numpy as np
 from detect_function import YOLOv5Detector
 from RM_serial_py.ser_api import build_send_packet, receive_packet, Radar_decision, \
-    build_data_decision, build_data_radar_all, build_data_map_robot, build_data_gimbaler_client
+    build_data_decision, build_data_map_robot, build_data_gimbaler_client
 import yaml
 
 from radio_py import data_parse, radio_recv
-from radio_py.data_parse import radio_positions, last_update_time
+from radio_py.data_parse import radio_positions, last_update_time, enemy_password, enemy_password_time
 with open("config.yaml", "r", encoding="utf-8") as f:  # 指定 UTF-8 编码
     config = yaml.safe_load(f)
 
 
 RADAR_POS_CMD_ID = [0x0A, 0x01]
 RADAR_MINIMAP_CMD_ID = [0x03, 0x05]
+RADAR_HP_CMD_ID = [0x0A, 0x02]
+RADAR_BULLET_CMD_ID = [0x0A, 0x03]
+RADAR_MACRO_STATE_CMD_ID = [0x0A, 0x04]
+RADAR_BOOSTS_CMD_ID = [0x0A, 0x05]
+RADAR_PASSWORD_CMD_ID = [0x0A, 0x06]
 
 
 state = config['global']['state']  # R:红方/B:蓝方
@@ -104,10 +109,14 @@ information_ui = np.zeros((config['ui']['info_panel_size'][1],
 information_ui_show = information_ui.copy()
 double_vulnerability_chance = -1  # 双倍易伤机会数
 opponent_double_vulnerability = -1  # 是否正在触发双倍易伤
+encryption_level = 0  # 己方加密等级 (1-3)
+key_modifiable = 0  # 是否可修改密钥 (0/1)
 target = -1  # 飞镖当前瞄准目标（用于触发双倍易伤）
 stage_remain_time = -1
 chances_flag = 1  # 双倍易伤触发标志位，需要从1递增，每小局比赛会重置，所以每局比赛要重启程序
-vulnerability = [-1, -1, -1, -1, -1, -1]  # 易伤情况
+vulnerability = [-1, -1, -1, -1, -1, -1]  # 敌方易伤情况
+ally_vulnerability = [-1, -1, -1, -1, -1, -1]  # 己方特殊标识情况
+last_password_sent = ''  # 上次发送的密钥，避免重复发送
 
 # 加载战场地图
 map = map_backup.copy()
@@ -523,41 +532,21 @@ def ser_send():
     }
 
     # 发送蓝方机器人坐标
-    def send_point_B(send_name, all_filter_data):
-        # front_time = time.time()
+    def send_point_B(send_name, data_source):
         # 转换为地图坐标系
-        filtered_xyz = (2800 - all_filter_data[send_name][1], all_filter_data[send_name][0])
+        filtered_xyz = (2800 - data_source[send_name][1], data_source[send_name][0])
         # 转换为裁判系统单位M
         ser_x = int(filtered_xyz[0]) * 10 / 10
         ser_y = int(1500 - filtered_xyz[1]) * 10 / 10
-        # 打包坐标数据包
-        # data = build_data_radar(mapping_table.get(send_name), ser_x, ser_y)
-        # packet, seq_s = build_send_packet(data, seq_s, [0x03, 0x05])
-        # ser1.write(packet)
-        # back_time = time.time()
-        # # 计算发送延时，动态调整
-        # waste_time = back_time - front_time
-        # # print("发送：",send_name, seq_s)
-        # time.sleep(0.1 - waste_time)
         return ser_x, ser_y
 
-    # 发送红发机器人坐标
-    def send_point_R(send_name, all_filter_data):
-        # front_time = time.time()
+    # 发送红方机器人坐标
+    def send_point_R(send_name, data_source):
         # 转换为地图坐标系
-        filtered_xyz = (all_filter_data[send_name][1], 1500 - all_filter_data[send_name][0])
+        filtered_xyz = (data_source[send_name][1], 1500 - data_source[send_name][0])
         # 转换为裁判系统单位M
         ser_x = int(filtered_xyz[0]) * 10 / 10
         ser_y = int(1500 - filtered_xyz[1]) * 10 / 10
-        # 打包坐标数据包
-        # data = build_data_radar(mapping_table.get(send_name), ser_x, ser_y)
-        # packet, seq_s = build_send_packet(data, seq_s, [0x03, 0x05])
-        # ser1.write(packet)
-        # back_time = time.time()
-        # # 计算发送延时，动态调整
-        # waste_time = back_time - front_time
-        # # print('发送：',send_name, seq_s)
-        # time.sleep(0.1 - waste_time)
         return ser_x, ser_y
 
     # 发送盲区预测点坐标
@@ -610,40 +599,43 @@ def ser_send():
             all_filter_data = filter.get_all_data()
             combined_data = all_filter_data.copy()
             import time
-            for robot in radio_positions:
-                if robot in last_update_time and time.time() - last_update_time[robot] < 2.0:
-                    combined_data[robot] = radio_positions[robot]
+            # 根据配置决定是否使用无线链路敌方位置数据
+            if config['global'].get('use_official_enemy_pos', False):
+                timeout = config['global'].get('official_enemy_pos_timeout', 2.0)
+                for robot in radio_positions:
+                    if robot in last_update_time and time.time() - last_update_time[robot] < timeout:
+                        combined_data[robot] = radio_positions[robot]
             update_send_map_by_detection(send_map, all_filter_data)
             if state == 'R':
                 if not guess_list.get('B1'):
                     if combined_data.get('B1', False):
-                        send_map['B1'] = send_point_B('B1', all_filter_data)
+                        send_map['B1'] = send_point_B('B1', combined_data)
                 else:
                     send_map['B1'] = (0, 0)
 
                 if not guess_list.get('B2'):
                     if combined_data.get('B2', False):
-                        send_map['B2'] = send_point_B('B2', all_filter_data)
+                        send_map['B2'] = send_point_B('B2', combined_data)
                 else:
                     send_map['B2'] = (0, 0)
 
                 # 步兵3号
                 if not guess_list.get('B3'):
                     if combined_data.get('B3', False):
-                        send_map['B3'] = send_point_B('B3', all_filter_data)
+                        send_map['B3'] = send_point_B('B3', combined_data)
                 else:
                     send_map['B3'] = (0, 0)
 
                 # 步兵4号
                 if not guess_list.get('B4'):
                     if combined_data.get('B4', False):
-                        send_map['B4'] = send_point_B('B4', all_filter_data)
+                        send_map['B4'] = send_point_B('B4', combined_data)
                 else:
                     send_map['B4'] = (0, 0)
 
                 if not guess_list.get('B5'):
                     if combined_data.get('B5', False):
-                        send_map['B5'] = send_point_B('B5', all_filter_data)
+                        send_map['B5'] = send_point_B('B5', combined_data)
                 else:
                     send_map['B5'] = (0, 0)
 
@@ -653,38 +645,38 @@ def ser_send():
                 # 未识别到哨兵，进行盲区预测
                 else:
                     if combined_data.get('B7', False):
-                        send_map['B7'] = send_point_B('B7', all_filter_data)
+                        send_map['B7'] = send_point_B('B7', combined_data)
 
             if state == 'B':
                 if not guess_list.get('R1'):
                     if combined_data.get('R1', False):
-                        send_map['R1'] = send_point_R('R1', all_filter_data)
+                        send_map['R1'] = send_point_R('R1', combined_data)
                 else:
                     send_map['R1'] = (0, 0)
 
                 if not guess_list.get('R2'):
                     if combined_data.get('R2', False):
-                        send_map['R2'] = send_point_R('R2', all_filter_data)
+                        send_map['R2'] = send_point_R('R2', combined_data)
                 else:
                     send_map['R2'] = (0, 0)
 
                 # 步兵3号
                 if not guess_list.get('R3'):
                     if combined_data.get('R3', False):
-                        send_map['R3'] = send_point_R('R3', all_filter_data)
+                        send_map['R3'] = send_point_R('R3', combined_data)
                 else:
                     send_map['R3'] = (0, 0)
 
                 # 步兵4号
                 if not guess_list.get('R4'):
                     if combined_data.get('R4', False):
-                        send_map['R4'] = send_point_R('R4', all_filter_data)
+                        send_map['R4'] = send_point_R('R4', combined_data)
                 else:
                     send_map['R4'] = (0, 0)
 
                 if not guess_list.get('R5'):
                     if combined_data.get('R5', False):
-                        send_map['R5'] = send_point_R('R5', all_filter_data)
+                        send_map['R5'] = send_point_R('R5', combined_data)
                 else:
                     send_map['R5'] = (0, 0)
 
@@ -694,12 +686,9 @@ def ser_send():
                 # 未识别到哨兵，进行盲区预测
                 else:
                     if combined_data.get('R7', False):
-                        send_map['R7'] = send_point_R('R7', all_filter_data)
+                        send_map['R7'] = send_point_R('R7', combined_data)
 
-            ser_data = build_data_radar_all(send_map, state)
-            packet, seq = build_send_packet(ser_data, seq, RADAR_POS_CMD_ID)
-            ser1.write(packet)
-
+            # 0x0305 发送双方位置到选手端小地图
             minimap_data = build_data_map_robot(send_map, state)
             minimap_packet, seq = build_send_packet(minimap_data, seq, RADAR_MINIMAP_CMD_ID)
             ser1.write(minimap_packet)
@@ -771,6 +760,15 @@ def ser_send():
                             chances_flag = 1
 
                         time_s = time.time()
+
+            # 如果获取到敌方密钥，自动发送验证密钥
+            if enemy_password and enemy_password != last_password_sent:
+                print(f"检测到敌方密钥: {enemy_password}，发送验证请求")
+                data = build_data_decision(chances_flag, state, password_cmd=2, password=enemy_password.encode('ascii'))
+                packet, seq = build_send_packet(data, seq, [0x03, 0x01])
+                ser1.write(packet)
+                last_password_sent = enemy_password
+                print(f"验证密钥请求已发送: {enemy_password}")
             
             
 
@@ -786,12 +784,14 @@ def ser_receive():
     global vulnerability  # 标记进度列表
     global double_vulnerability_chance  # 拥有双倍易伤次数
     global opponent_double_vulnerability  # 双倍易伤触发状态
+    global encryption_level  # 己方加密等级
+    global key_modifiable  # 是否可修改密钥
     global target  # 飞镖当前目标
-    global stage_remain_time # 游戏剩余时间
-    progress_cmd_id = [0x02, 0x0C]  # 任意想要接收数据的命令码，这里是雷达标记进度的命令码0x020E
-    vulnerability_cmd_id = [0x02, 0x0E]  # 双倍易伤次数和触发状态
+    global stage_remain_time  # 游戏剩余时间
+    progress_cmd_id = [0x02, 0x0C]  # 雷达标记进度
+    vulnerability_cmd_id = [0x02, 0x0E]  # 雷达信息 (双倍易伤/加密等级)
     target_cmd_id = [0x01, 0x05]  # 飞镖目标
-    game_state_cmd_id = [0x00, 0x01]
+    game_state_cmd_id = [0x00, 0x01]  # 比赛状态
     buffer = b''  # 初始化缓冲区
     while True:
         # 从串口读取数据
@@ -820,21 +820,26 @@ def ser_receive():
                     break
 
                 # 解析数据包
-                progress_result = receive_packet(packet_data, progress_cmd_id,info=False)  # 解析单个数据包，cmd_id为0x020E,不输出日志
+                progress_result = receive_packet(packet_data, progress_cmd_id, info=False)
                 # 解析决策信息
                 vulnerability_result = receive_packet(packet_data, vulnerability_cmd_id, info=False)
                 # 解析飞镖目标
                 target_result = receive_packet(packet_data, target_cmd_id, info=False)
                 # 解析比赛状态
-                game_status_result = receive_packet(packet_data, game_state_cmd_id, info=False) # 修改变量名
+                game_status_result = receive_packet(packet_data, game_state_cmd_id, info=False)
+                # 0x0A01-0x0A06 已通过 radio_py 无线链路解析，不在串口中重复解析
 
 
 
                 # 更新裁判系统数据，标记进度、易伤、飞镖目标
                 if progress_result is not None:
                     received_cmd_id1, received_data1, received_seq1 = progress_result
-                    # vulnerability = received_data1[0]
-                    vulnerability = [((received_data1[0] >> i) & 0x01) * 120 for i in range(5)]
+                    # 0x020C 雷达标记进度 (2字节)
+                    # bit0~5: 对方英雄/工程/步兵3/4/空中/哨兵 易伤标记 (1=达标)
+                    # bit6~11: 己方英雄/工程/步兵3/4/空中/哨兵 特殊标识
+                    mark_data = int.from_bytes(received_data1[:2], byteorder='little')
+                    vulnerability = [((mark_data >> i) & 0x01) * 120 for i in range(6)]
+                    ally_vulnerability = [((mark_data >> (i + 6)) & 0x01) * 120 for i in range(6)]
                     if state == 'R':
                         guess_value_now['B1'] = vulnerability[0]
                         guess_value_now['B2'] = vulnerability[1]
@@ -846,16 +851,12 @@ def ser_receive():
                 if vulnerability_result is not None:
                     received_cmd_id2, received_data2, received_seq2 = vulnerability_result
                     received_data2 = list(received_data2)[0]
-                    double_vulnerability_chance, opponent_double_vulnerability = Radar_decision(received_data2)
+                    double_vulnerability_chance, opponent_double_vulnerability, encryption_level, key_modifiable = Radar_decision(received_data2)
                 if target_result is not None:
                     received_cmd_id3, received_data3, received_seq3 = target_result
                     target = (list(received_data3)[1] & 0b1100000) >> 5
                 if game_status_result is not None:
                     received_cmd_id4, received_data4, received_seq4 = game_status_result
-                    # received_data4 包含了 game_status_t 的数据
-                    # game_type_progress = received_data4[0] # 字节0: game_type 和 game_progress
-                    # stage_remain_time_bytes = received_data4[1:3] # 字节1和2: stage_remain_time
-                    # sync_timestamp_bytes = received_data4[3:11] # 字节3到10: SyncTimeStamp
                     stage_remain_time_bytes = received_data4[1:3]
                     stage_remain_time = int.from_bytes(stage_remain_time_bytes, byteorder='little', signed=False)
                     print(f"比赛剩余时间: {stage_remain_time} 秒")
@@ -1043,13 +1044,21 @@ while True:
     t_p = te - ts
     print("fps:", 1 / t_p)  # 打印帧率
     # 绘制UI
-    _ = draw_information_ui(vulnerability, state, information_ui_show)
+    _ = draw_information_ui(vulnerability, state, information_ui_show, ally_vulnerability)
     cv2.putText(information_ui_show, "vulnerability_chances: " + str(double_vulnerability_chance),
                 (10, 350),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
     cv2.putText(information_ui_show, "vulnerability_Triggering: " + str(opponent_double_vulnerability),
                 (10, 400),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+    cv2.putText(information_ui_show, "encryption_level: " + str(encryption_level),
+                (10, 450),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+    cv2.putText(information_ui_show, "key_modifiable: " + str(key_modifiable),
+                (10, 480),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+    # 绘制敌方信息
+    draw_enemy_info(enemy_hp, enemy_bullet, enemy_boosts, enemy_password, information_ui_show)
     cv2.imshow('information_ui', information_ui_show)
     map_show = cv2.resize(map, tuple(config['ui']['map_display_size']))
     cv2.imshow('map', map_show)
