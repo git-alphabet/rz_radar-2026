@@ -843,18 +843,21 @@ def ser_receive():
                     if state == 'R':
                         guess_value_now['B1'] = vulnerability[0]
                         guess_value_now['B2'] = vulnerability[1]
-                        guess_value_now['B7'] = vulnerability[4]
+                        guess_value_now['B7'] = vulnerability[5]
                     else:
                         guess_value_now['R1'] = vulnerability[0]
                         guess_value_now['R2'] = vulnerability[1]
-                        guess_value_now['R7'] = vulnerability[4]
+                        guess_value_now['R7'] = vulnerability[5]
                 if vulnerability_result is not None:
                     received_cmd_id2, received_data2, received_seq2 = vulnerability_result
                     received_data2 = list(received_data2)[0]
                     double_vulnerability_chance, opponent_double_vulnerability, encryption_level, key_modifiable = Radar_decision(received_data2)
                 if target_result is not None:
                     received_cmd_id3, received_data3, received_seq3 = target_result
-                    target = (list(received_data3)[1] & 0b1100000) >> 5
+                    # dart_info_t: byte0=dart_remaining_time, byte1-2=dart_info (uint16)
+                    # bit 6-8 of dart_info = 飞镖选定目标
+                    dart_info = received_data3[1] | (received_data3[2] << 8)
+                    target = (dart_info >> 6) & 0x07
                 if game_status_result is not None:
                     received_cmd_id4, received_data4, received_seq4 = game_status_result
                     stage_remain_time_bytes = received_data4[1:3]
@@ -1012,11 +1015,6 @@ while True:
 
     # 获取所有识别到的机器人坐标
     all_filter_data = filter.get_all_data()
-            combined_data = all_filter_data.copy()
-            import time
-            for robot in radio_positions:
-                if robot in last_update_time and time.time() - last_update_time[robot] < 2.0:
-                    combined_data[robot] = radio_positions[robot]
     # print(all_filter_data_name)
     if all_filter_data != {}:
         for name, xyxy in all_filter_data.items():
