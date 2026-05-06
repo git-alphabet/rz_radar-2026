@@ -861,10 +861,13 @@ if config['global']['use_serial']:
 else:
     print("跳过串口接收线程初始化")
 
-# 无线电接收线程
-if config['global']['use_radio']:
-    thread_radio_receive = threading.Thread(target=radio_recv.main, daemon=True)
-    thread_radio_receive.start()
+
+# 环境不兼容，该部分单独一个进程
+# # 无线电接收线程
+# if config['global']['use_radio']:
+#     thread_radio_receive = threading.Thread(target=radio_recv.main, daemon=True)
+#     thread_radio_receive.start()
+
 
 # 无线电解析线程
 if config['global']['use_radio']:
