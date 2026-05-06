@@ -25,6 +25,9 @@ from detect_function import YOLOv5Detector
 from RM_serial_py.ser_api import build_send_packet, receive_packet, Radar_decision, \
     build_data_decision, build_data_radar_all, build_data_map_robot, build_data_gimbaler_client
 import yaml
+
+from radio_py import data_parse, radio_recv
+from radio_py.data_parse import radio_positions, last_update_time
 with open("config.yaml", "r", encoding="utf-8") as f:  # 指定 UTF-8 编码
     config = yaml.safe_load(f)
 
@@ -605,36 +608,41 @@ def ser_send():
         try:
             send_map = send_map_template.copy()
             all_filter_data = filter.get_all_data()
+            combined_data = all_filter_data.copy()
+            import time
+            for robot in radio_positions:
+                if robot in last_update_time and time.time() - last_update_time[robot] < 2.0:
+                    combined_data[robot] = radio_positions[robot]
             update_send_map_by_detection(send_map, all_filter_data)
             if state == 'R':
                 if not guess_list.get('B1'):
-                    if all_filter_data.get('B1', False):
+                    if combined_data.get('B1', False):
                         send_map['B1'] = send_point_B('B1', all_filter_data)
                 else:
                     send_map['B1'] = (0, 0)
 
                 if not guess_list.get('B2'):
-                    if all_filter_data.get('B2', False):
+                    if combined_data.get('B2', False):
                         send_map['B2'] = send_point_B('B2', all_filter_data)
                 else:
                     send_map['B2'] = (0, 0)
 
                 # 步兵3号
                 if not guess_list.get('B3'):
-                    if all_filter_data.get('B3', False):
+                    if combined_data.get('B3', False):
                         send_map['B3'] = send_point_B('B3', all_filter_data)
                 else:
                     send_map['B3'] = (0, 0)
 
                 # 步兵4号
                 if not guess_list.get('B4'):
-                    if all_filter_data.get('B4', False):
+                    if combined_data.get('B4', False):
                         send_map['B4'] = send_point_B('B4', all_filter_data)
                 else:
                     send_map['B4'] = (0, 0)
 
                 if not guess_list.get('B5'):
-                    if all_filter_data.get('B5', False):
+                    if combined_data.get('B5', False):
                         send_map['B5'] = send_point_B('B5', all_filter_data)
                 else:
                     send_map['B5'] = (0, 0)
@@ -644,38 +652,38 @@ def ser_send():
                     send_map['B7'] = send_point_guess('B7', guess_time_limit)
                 # 未识别到哨兵，进行盲区预测
                 else:
-                    if all_filter_data.get('B7', False):
+                    if combined_data.get('B7', False):
                         send_map['B7'] = send_point_B('B7', all_filter_data)
 
             if state == 'B':
                 if not guess_list.get('R1'):
-                    if all_filter_data.get('R1', False):
+                    if combined_data.get('R1', False):
                         send_map['R1'] = send_point_R('R1', all_filter_data)
                 else:
                     send_map['R1'] = (0, 0)
 
                 if not guess_list.get('R2'):
-                    if all_filter_data.get('R2', False):
+                    if combined_data.get('R2', False):
                         send_map['R2'] = send_point_R('R2', all_filter_data)
                 else:
                     send_map['R2'] = (0, 0)
 
                 # 步兵3号
                 if not guess_list.get('R3'):
-                    if all_filter_data.get('R3', False):
+                    if combined_data.get('R3', False):
                         send_map['R3'] = send_point_R('R3', all_filter_data)
                 else:
                     send_map['R3'] = (0, 0)
 
                 # 步兵4号
                 if not guess_list.get('R4'):
-                    if all_filter_data.get('R4', False):
+                    if combined_data.get('R4', False):
                         send_map['R4'] = send_point_R('R4', all_filter_data)
                 else:
                     send_map['R4'] = (0, 0)
 
                 if not guess_list.get('R5'):
-                    if all_filter_data.get('R5', False):
+                    if combined_data.get('R5', False):
                         send_map['R5'] = send_point_R('R5', all_filter_data)
                 else:
                     send_map['R5'] = (0, 0)
@@ -685,7 +693,7 @@ def ser_send():
                     send_map['R7'] = send_point_guess('R7', guess_time_limit)
                 # 未识别到哨兵，进行盲区预测
                 else:
-                    if all_filter_data.get('R7', False):
+                    if combined_data.get('R7', False):
                         send_map['R7'] = send_point_R('R7', all_filter_data)
 
             ser_data = build_data_radar_all(send_map, state)
@@ -884,12 +892,26 @@ if config['global']['use_serial']:
 else:
     print("跳过串口接收线程初始化")
 
+
+# 环境不兼容，该部分单独一个进程
+# # 无线电接收线程
+# if config['global']['use_radio']:
+#     thread_radio_receive = threading.Thread(target=radio_recv.main, daemon=True)
+#     thread_radio_receive.start()
+
+
+# 无线电解析线程
+if config['global']['use_radio']:
+    thread_radio_parse = threading.Thread(target=data_parse.main, daemon=True)
+    thread_radio_parse.start()
+
 # 串口发送线程
 if config['global']['use_serial']:
     thread_list = threading.Thread(target=ser_send, daemon=True)
     thread_list.start()
 else:
     print("跳过串口发送线程初始化")
+
 
 camera_image = None
 
@@ -989,6 +1011,11 @@ while True:
 
     # 获取所有识别到的机器人坐标
     all_filter_data = filter.get_all_data()
+            combined_data = all_filter_data.copy()
+            import time
+            for robot in radio_positions:
+                if robot in last_update_time and time.time() - last_update_time[robot] < 2.0:
+                    combined_data[robot] = radio_positions[robot]
     # print(all_filter_data_name)
     if all_filter_data != {}:
         for name, xyxy in all_filter_data.items():
