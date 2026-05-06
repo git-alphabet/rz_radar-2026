@@ -126,6 +126,32 @@ def build_data_map_robot(send_map, state):
     return data
 
 
+# 0x0308 custom_info_t 字段：sender_id(2) + receiver_id(2) + user_data[30]
+def build_data_gimbaler_client(chances, state, opponent_state):
+    """构建飞手选手端自定义信息 (0x0308 custom_info_t)
+    Args:
+        chances: 双倍易伤机会数 (0-2)
+        state: 队伍颜色 'R'/'B'
+        opponent_state: 对方是否正在被双倍易伤 (0/1)
+    """
+    data = bytearray()
+    if state == 'R':
+        data.extend(struct.pack('<H', 9))       # sender_id: 红方雷达
+        data.extend(struct.pack('<H', 0x0106))  # receiver_id: 红方飞手选手端
+    else:
+        data.extend(struct.pack('<H', 109))     # sender_id: 蓝方雷达
+        data.extend(struct.pack('<H', 0x016A))  # receiver_id: 蓝方飞手选手端
+
+    if chances > 0 and opponent_state == 1:
+        send_str = f"双倍易伤次数：{chances} 敌方易伤请稍等"
+    elif chances > 0 and opponent_state == 0:
+        send_str = f"双倍易伤次数：{chances} 可发起"
+    else:
+        send_str = "无双倍易伤次数"
+    user_data_bytes = send_str.encode('utf-16-le')
+    data.extend(user_data_bytes[:30].ljust(30, b'\x00'))
+    return data
+
 
 def build_data_decision(chances, state, password_cmd=0, password=b'000000'):
     """构建雷达自主决策指令 (0x0301 + 0x0121)
@@ -148,27 +174,6 @@ def build_data_decision(chances, state, password_cmd=0, password=b'000000'):
     pwd = password[:6].ljust(6, b'0')  # 确保6字节
     data.extend(pwd)                                             # password[6]
     return data
-
-def build_data_gimbaler_client(chances, state, opponent_state):
-    data = bytearray()
-    if state == 'R':
-        data.extend(bytearray(struct.pack('H', 9)))
-        data.extend(bytearray(struct.pack('H', 0x0106)))
-    else:
-        data.extend(bytearray(struct.pack('H', 109)))
-        data.extend(bytearray(struct.pack('H', 0x016A)))
-    
-    if (chances > 0 and opponent_state == 1):
-        send_str = "双倍易伤次数：" + str(chances) + " 敌方易伤请稍等"
-    elif (chances > 0 and opponent_state == 0):
-        send_str = "双倍易伤次数：" + str(chances) + " 可发起"
-    else:
-        send_str = "无双倍易伤次数"
-    user_data_bytes = send_str.encode('utf-16-le')
-    padded_user_data_bytes = user_data_bytes.ljust(30, b'\0')
-    data.extend(padded_user_data_bytes)
-    return data
-
 
 
 # 完整数据包构建
