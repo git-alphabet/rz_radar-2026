@@ -3,7 +3,7 @@ import serial
 from ser_api import receive_packet
 
 ser = serial.Serial('COM19', 115200, timeout=1)  # 裁判系统规定的频率
-expected_cmd_id1 = [0x03, 0x03]  # 任意想要接收数据的命令码，这里是雷达标记进度的命令码0x020E
+expected_cmd_id1 = [0x02, 0x0E]  # 任意想要接收数据的命令码，这里是雷达信息命令码0x020E
 buffer = b''  # 初始化缓冲区
 
 # 接收示例

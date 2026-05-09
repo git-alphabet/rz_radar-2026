@@ -128,7 +128,7 @@ def build_data_map_robot(send_map, state):
 
 # 0x0308 custom_info_t 字段：sender_id(2) + receiver_id(2) + user_data[30]
 def build_data_gimbaler_client(chances, state, opponent_state):
-    """构建飞手选手端自定义信息 (0x0308 custom_info_t)
+    """构建云台手选手端自定义信息 (0x0308 custom_info_t)
     Args:
         chances: 双倍易伤机会数 (0-2)
         state: 队伍颜色 'R'/'B'
@@ -137,10 +137,10 @@ def build_data_gimbaler_client(chances, state, opponent_state):
     data = bytearray()
     if state == 'R':
         data.extend(struct.pack('<H', 9))       # sender_id: 红方雷达
-        data.extend(struct.pack('<H', 0x0106))  # receiver_id: 红方飞手选手端
+        data.extend(struct.pack('<H', 0x0106))  # receiver_id: 红方云台手选手端
     else:
         data.extend(struct.pack('<H', 109))     # sender_id: 蓝方雷达
-        data.extend(struct.pack('<H', 0x016A))  # receiver_id: 蓝方飞手选手端
+        data.extend(struct.pack('<H', 0x016A))  # receiver_id: 蓝方云台手选手端
 
     if chances > 0 and opponent_state == 1:
         send_str = f"双倍易伤次数：{chances} 敌方易伤请稍等"

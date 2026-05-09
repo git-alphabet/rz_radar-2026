@@ -27,7 +27,7 @@ from RM_serial_py.ser_api import build_send_packet, receive_packet, Radar_decisi
 import yaml
 
 from radio_py import data_parse, radio_recv
-from radio_py.data_parse import radio_positions, last_update_time, enemy_password, enemy_password_time
+from radio_py.data_parse import radio_positions, last_update_time, enemy_hp, enemy_bullet, enemy_boosts
 with open("config.yaml", "r", encoding="utf-8") as f:  # 指定 UTF-8 编码
     config = yaml.safe_load(f)
 
@@ -711,7 +711,7 @@ def ser_send():
             send_gimbaler_data = build_data_gimbaler_client(double_vulnerability_chance, state, opponent_double_vulnerability)
             send_gimbaler_packet, seq = build_send_packet(send_gimbaler_data, seq, [0x03, 0x08])
             ser1.write(send_gimbaler_packet)
-            print("发送飞手")
+            print("发送云台手")
             print(target)
 
             # 判断飞镖的目标是否切换，切换则尝试发动双倍易伤
@@ -731,8 +731,6 @@ def ser_send():
                         print("请求成功", chances_flag)
                         # 更新标志位
                         chances_flag += 1
-                        if chances_flag >= 3:
-                            chances_flag = 1
 
                         time_s = time.time()
                 else:
@@ -756,19 +754,18 @@ def ser_send():
                         print("请求成功", chances_flag)
                         # 更新标志位
                         chances_flag += 1
-                        if chances_flag >= 3:
-                            chances_flag = 1
 
                         time_s = time.time()
 
             # 如果获取到敌方密钥，自动发送验证密钥
-            if enemy_password and enemy_password != last_password_sent:
-                print(f"检测到敌方密钥: {enemy_password}，发送验证请求")
-                data = build_data_decision(chances_flag, state, password_cmd=2, password=enemy_password.encode('ascii'))
+            if data_parse.enemy_password and data_parse.enemy_password != last_password_sent:
+                print(f"检测到敌方密钥: {data_parse.enemy_password}，发送验证请求")
+                data = build_data_decision(chances_flag, state, password_cmd=2,
+                                           password=data_parse.enemy_password.encode('ascii'))
                 packet, seq = build_send_packet(data, seq, [0x03, 0x01])
                 ser1.write(packet)
-                last_password_sent = enemy_password
-                print(f"验证密钥请求已发送: {enemy_password}")
+                last_password_sent = data_parse.enemy_password
+                print(f"验证密钥请求已发送: {data_parse.enemy_password}")
             
             
 
@@ -1056,7 +1053,7 @@ while True:
                 (10, 480),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
     # 绘制敌方信息
-    draw_enemy_info(enemy_hp, enemy_bullet, enemy_boosts, enemy_password, information_ui_show)
+    draw_enemy_info(enemy_hp, enemy_bullet, enemy_boosts, data_parse.enemy_password, information_ui_show)
     cv2.imshow('information_ui', information_ui_show)
     map_show = cv2.resize(map, tuple(config['ui']['map_display_size']))
     cv2.imshow('map', map_show)

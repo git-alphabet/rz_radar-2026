@@ -33,6 +33,9 @@ last_update_time = {}
 # 全局变量存储敌方密钥
 enemy_password = ''
 enemy_password_time = 0
+enemy_hp = {}
+enemy_bullet = {}
+enemy_boosts = {}
 robot_mapping = {
     "hero": "R1",
     "engineer": "R2",
@@ -98,6 +101,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    global enemy_password
+    global enemy_password_time
     args = parse_args()
     access_code = INFO_ACCESS_CODE if args.wave == "info" else JAM_ACCESS_CODE
     expected = set(INFO_CMD_ORDER) if args.wave == "info" else {0x0A06}
@@ -131,6 +136,28 @@ def main() -> None:
                             robot = robot_mapping[key]
                             radio_positions[robot] = (value['x_cm'], value['y_cm'])
                             last_update_time[robot] = time.time()
+
+                    if decoded.cmd_id == 0x0A02:
+                        enemy_hp["1"] = decoded.data["hero"]
+                        enemy_hp["2"] = decoded.data["engineer"]
+                        enemy_hp["3"] = decoded.data["infantry3"]
+                        enemy_hp["4"] = decoded.data["infantry4"]
+                        enemy_hp["7"] = decoded.data["sentry"]
+
+                    if decoded.cmd_id == 0x0A03:
+                        enemy_bullet["1"] = decoded.data["hero"]
+                        enemy_bullet["3"] = decoded.data["infantry3"]
+                        enemy_bullet["4"] = decoded.data["infantry4"]
+                        enemy_bullet["6"] = decoded.data["aerial"]
+                        enemy_bullet["7"] = decoded.data["sentry"]
+
+                    if decoded.cmd_id == 0x0A05:
+                        enemy_boosts["1"] = decoded.data["hero"]
+                        enemy_boosts["2"] = decoded.data["engineer"]
+                        enemy_boosts["3"] = decoded.data["infantry3"]
+                        enemy_boosts["4"] = decoded.data["infantry4"]
+                        enemy_boosts["7"] = decoded.data["sentry"]
+                        enemy_boosts["sentry_posture"] = decoded.data["sentry_posture"]
 
                     # 解析敌方密钥并存储
                     if decoded.cmd_id == 0x0A06:
