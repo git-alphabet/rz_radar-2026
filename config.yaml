@@ -8,6 +8,15 @@ global:
   use_official_enemy_pos: True  # 是否优先使用无线链路敌方位置数据 (0x0A01) 代替雷达识别
   official_enemy_pos_timeout: 2.0  # 无线链路敌方位置数据超时时间 (秒)
 
+alert:
+  enabled: true
+  base_position_cm:
+    R: [0, 0]
+    B: [0, 0]
+  distance_threshold_cm: 250
+  base_hp_drop_window_sec: 3.0
+  sentry_warning_cmd_id: 0x0200
+
 serial: # 串口
   port: '/dev/ttyUSB0' 
   baudrate: 115200
