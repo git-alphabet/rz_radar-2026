@@ -117,6 +117,26 @@ chances_flag = 1  # 双倍易伤触发标志位，需要从1递增，每小局�
 vulnerability = [-1, -1, -1, -1, -1, -1]  # 敌方易伤情况
 ally_vulnerability = [-1, -1, -1, -1, -1, -1]  # 己方特殊标识情况
 last_password_sent = ''  # 上次发送的密钥，避免重复发送
+base_hp = None
+base_hp_last = None
+base_hp_drop_time = None
+base_hp_drop_handled = False
+last_enemy_near_time = None
+
+alert_config = config.get('alert', {})
+alert_enabled = bool(alert_config.get('enabled', False))
+alert_base_positions = alert_config.get('base_position_cm', {})
+alert_distance_threshold_cm = float(alert_config.get('distance_threshold_cm', 250))
+alert_base_hp_drop_window_sec = float(alert_config.get('base_hp_drop_window_sec', 3.0))
+alert_sentry_cmd_id_value = alert_config.get('sentry_warning_cmd_id', 0x0200)
+if isinstance(alert_sentry_cmd_id_value, str):
+    try:
+        alert_sentry_cmd_id = int(alert_sentry_cmd_id_value, 0)
+    except ValueError:
+        alert_sentry_cmd_id = 0x0200
+else:
+    alert_sentry_cmd_id = int(alert_sentry_cmd_id_value)
+alert_base_position = alert_base_positions.get(state)
 
 # 加载战场地图
 map = map_backup.copy()
@@ -512,6 +532,9 @@ def ser_send():
     seq = 0
     global chances_flag
     global guess_value
+    global base_hp_drop_time
+    global base_hp_drop_handled
+    global last_enemy_near_time
     # 单点预测时间
     guess_time = {
         'B1': 0,
@@ -695,6 +718,47 @@ def ser_send():
 
             time.sleep(0.2)
             print(send_map, seq)
+            # 基地掉血且敌方地面兵种接近时告警哨兵
+            if alert_enabled and alert_base_position:
+                try:
+                    now = time.time()
+                    base_x, base_y = float(alert_base_position[0]), float(alert_base_position[1])
+                    threshold_sq = alert_distance_threshold_cm * alert_distance_threshold_cm
+                    enemy_prefix = 'B' if state == 'R' else 'R'
+                    enemy_ground_ids = ('1', '2', '3', '4', '5', '7')
+                    enemy_near = False
+                    for robot_id in enemy_ground_ids:
+                        pos = send_map.get(f"{enemy_prefix}{robot_id}")
+                        if not pos:
+                            continue
+                        pos_x, pos_y = pos
+                        if pos_x == 0 and pos_y == 0:
+                            continue
+                        dx = pos_x - base_x
+                        dy = pos_y - base_y
+                        if dx * dx + dy * dy <= threshold_sq:
+                            enemy_near = True
+                            break
+                    if enemy_near:
+                        last_enemy_near_time = now
+
+                    if base_hp_drop_time is not None and not base_hp_drop_handled and last_enemy_near_time is not None:
+                        drop_delta = base_hp_drop_time - last_enemy_near_time
+                        if 0 <= drop_delta <= alert_base_hp_drop_window_sec:
+                            sender_id = 9 if state == 'R' else 109
+                            receiver_id = 7 if state == 'R' else 107
+                            warning_data = bytearray()
+                            warning_data.extend(alert_sentry_cmd_id.to_bytes(2, byteorder='little'))
+                            warning_data.extend(sender_id.to_bytes(2, byteorder='little'))
+                            warning_data.extend(receiver_id.to_bytes(2, byteorder='little'))
+                            warning_data.extend(bytearray([1]))
+                            warning_packet, seq = build_send_packet(warning_data, seq, [0x03, 0x01])
+                            ser1.write(warning_packet)
+                            base_hp_drop_handled = True
+                        elif now - base_hp_drop_time > alert_base_hp_drop_window_sec:
+                            base_hp_drop_handled = True
+                finally:
+                    pass
             # 超过单点预测时间上限，更新上次预测的进度
             if time.time() - update_time > guess_time_limit:
                 update_time = time.time()
@@ -785,10 +849,15 @@ def ser_receive():
     global key_modifiable  # 是否可修改密钥
     global target  # 飞镖当前目标
     global stage_remain_time  # 游戏剩余时间
+    global base_hp
+    global base_hp_last
+    global base_hp_drop_time
+    global base_hp_drop_handled
     progress_cmd_id = [0x02, 0x0C]  # 雷达标记进度
     vulnerability_cmd_id = [0x02, 0x0E]  # 雷达信息 (双倍易伤/加密等级)
     target_cmd_id = [0x01, 0x05]  # 飞镖目标
     game_state_cmd_id = [0x00, 0x01]  # 比赛状态
+    base_hp_cmd_id = [0x00, 0x03]  # 己方基地血量
     buffer = b''  # 初始化缓冲区
     while True:
         # 从串口读取数据
@@ -824,6 +893,8 @@ def ser_receive():
                 target_result = receive_packet(packet_data, target_cmd_id, info=False)
                 # 解析比赛状态
                 game_status_result = receive_packet(packet_data, game_state_cmd_id, info=False)
+                # 解析我方基地血量
+                base_hp_result = receive_packet(packet_data, base_hp_cmd_id, info=False)
                 # 0x0A01-0x0A06 已通过 radio_py 无线链路解析，不在串口中重复解析
 
 
@@ -860,6 +931,15 @@ def ser_receive():
                     stage_remain_time_bytes = received_data4[1:3]
                     stage_remain_time = int.from_bytes(stage_remain_time_bytes, byteorder='little', signed=False)
                     print(f"比赛剩余时间: {stage_remain_time} 秒")
+
+                if base_hp_result is not None:
+                    received_cmd_id5, received_data5, received_seq5 = base_hp_result
+                    if len(received_data5) >= 16:
+                        base_hp = int.from_bytes(received_data5[14:16], byteorder='little', signed=False)
+                        if base_hp_last is not None and base_hp < base_hp_last:
+                            base_hp_drop_time = time.time()
+                            base_hp_drop_handled = False
+                        base_hp_last = base_hp
 
 
                 # 从缓冲区中移除已解析的数据包
