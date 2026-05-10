@@ -148,3 +148,5 @@ docker/*.sh
 .github/
 /CLAUDE.md
 .vscode/
+
+*.pdf
