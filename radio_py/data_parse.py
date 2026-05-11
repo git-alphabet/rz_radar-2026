@@ -36,6 +36,7 @@ enemy_password_time = 0
 enemy_hp = {}
 enemy_bullet = {}
 enemy_boosts = {}
+enemy_macro_state = None
 robot_mapping = {
     "hero": "R1",
     "engineer": "R2",
@@ -103,6 +104,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     global enemy_password
     global enemy_password_time
+    global enemy_macro_state
     args = parse_args()
     access_code = INFO_ACCESS_CODE if args.wave == "info" else JAM_ACCESS_CODE
     expected = set(INFO_CMD_ORDER) if args.wave == "info" else {0x0A06}
@@ -158,6 +160,9 @@ def main() -> None:
                         enemy_boosts["4"] = decoded.data["infantry4"]
                         enemy_boosts["7"] = decoded.data["sentry"]
                         enemy_boosts["sentry_posture"] = decoded.data["sentry_posture"]
+
+                    if decoded.cmd_id == 0x0A04:
+                        enemy_macro_state = decoded.data["macro_state"]
 
                     # 解析敌方密钥并存储
                     if decoded.cmd_id == 0x0A06:
