@@ -27,7 +27,7 @@ from RM_serial_py.ser_api import build_send_packet, receive_packet, Radar_decisi
 import yaml
 
 from radio_py import data_parse, radio_recv
-from radio_py.data_parse import radio_positions, last_update_time, enemy_hp, enemy_bullet, enemy_boosts
+from radio_py.data_parse import radio_positions, last_update_time, enemy_hp, enemy_bullet, enemy_boosts, enemy_macro_state
 with open("config.yaml", "r", encoding="utf-8") as f:  # 指定 UTF-8 编码
     config = yaml.safe_load(f)
 
@@ -122,6 +122,21 @@ base_hp_last = None
 base_hp_drop_time = None
 base_hp_drop_handled = False
 last_enemy_near_time = None
+base_hp_max = 5000
+outpost_hp = None
+ally_robot_hp = {}
+
+event_data = None
+
+dart_last_hit_target = 0
+dart_hit_count = 0
+dart_selected_target = 0
+dart_latest_launch_cmd_time = 0
+dart_launch_count = 0
+last_dart_launch_cmd_time = 0
+
+pending_double_vulnerability = False
+pending_double_vulnerability_reason = ""
 
 alert_config = config.get('alert', {})
 alert_enabled = bool(alert_config.get('enabled', False))
@@ -535,6 +550,17 @@ def ser_send():
     global base_hp_drop_time
     global base_hp_drop_handled
     global last_enemy_near_time
+    global outpost_hp
+    global ally_robot_hp
+    global event_data
+    global dart_last_hit_target
+    global dart_hit_count
+    global dart_selected_target
+    global dart_latest_launch_cmd_time
+    global dart_launch_count
+    global last_dart_launch_cmd_time
+    global pending_double_vulnerability
+    global pending_double_vulnerability_reason
     # 单点预测时间
     guess_time = {
         'B1': 0,
@@ -597,7 +623,6 @@ def ser_send():
         guess_table.get(send_name)[guess_index.get(send_name)][1]
 
     time_s = time.time()
-    target_last = 0  # 上一帧的飞镖目标
     update_time = 0  # 上次预测点更新时间
     send_count = 0  # 信道占用数，上限为4
     send_map_template = {name: (0, 0) for name in ALL_GROUND_ROBOTS}
@@ -611,6 +636,55 @@ def ser_send():
                 send_map[robot_name] = send_point_B(robot_name, all_filter_data)
             else:
                 send_map[robot_name] = send_point_R(robot_name, all_filter_data)
+
+    def is_enemy_ground_boost_high():
+        if not enemy_boosts:
+            return False
+        boost_threshold = 20
+        boosted = 0
+        for robot_id in ("1", "2", "3", "4", "7"):
+            record = enemy_boosts.get(robot_id)
+            if not record:
+                continue
+            attack = record.get("attack_percent", 0)
+            defense = record.get("defense_percent", 0)
+            recover = record.get("hp_recover_percent", 0)
+            negative = abs(record.get("negative_defense_percent", 0))
+            heat = record.get("heat_cooling", 0) / 10.0
+            if max(attack, defense, recover, negative, heat) >= boost_threshold:
+                boosted += 1
+        return boosted >= 2
+
+    def try_send_double_vulnerability(reason):
+        nonlocal seq
+        nonlocal time_s
+        global chances_flag
+        global pending_double_vulnerability
+        global pending_double_vulnerability_reason
+        if double_vulnerability_chance <= 0:
+            pending_double_vulnerability = False
+            pending_double_vulnerability_reason = ""
+            return False
+        if opponent_double_vulnerability != 0:
+            pending_double_vulnerability = True
+            pending_double_vulnerability_reason = reason
+            return False
+        now = time.time()
+        if now - time_s <= 10:
+            return False
+        data = build_data_decision(chances_flag, state)
+        packet, seq = build_send_packet(data, seq, [0x03, 0x01])
+        ser1.write(packet)
+        print(f"双倍易伤请求: {reason}, flag={chances_flag}")
+        chances_flag += 1
+        time_s = now
+        pending_double_vulnerability = False
+        pending_double_vulnerability_reason = ""
+        return True
+
+    double_vuln_window_sec = 420
+    double_vuln_first_fallback_sec = double_vuln_window_sec // 2
+    double_vuln_second_fallback_sec = double_vuln_window_sec // 4
 
     while True:
 
@@ -778,48 +852,66 @@ def ser_send():
             print("发送云台手")
             print(target)
 
-            # 判断飞镖的目标是否切换，切换则尝试发动双倍易伤
-            if target != target_last and target != 0:
-                target_last = target
-                print("飞镖目标切换，尝试发动双倍易伤")
-                # 有双倍易伤机会，并且当前没有在双倍易伤
-                if double_vulnerability_chance > 0 and opponent_double_vulnerability == 0:
-                    time_e = time.time()
-                    # 发送时间间隔为10秒
-                    if time_e - time_s > 10:
-                        print("请求双倍触发")
-                        data = build_data_decision(chances_flag, state)
-                        packet, seq = build_send_packet(data, seq, [0x03, 0x01])
-                        # print(packet.hex(),chances_flag,state)
-                        ser1.write(packet)
-                        print("请求成功", chances_flag)
-                        # 更新标志位
-                        chances_flag += 1
+            if pending_double_vulnerability and opponent_double_vulnerability == 0:
+                try_send_double_vulnerability(pending_double_vulnerability_reason or "pending")
 
-                        time_s = time.time()
-                else:
-                    print("无双倍易伤机会")
-                    
+            ally_outpost_destroyed = False
+            if outpost_hp is not None:
+                ally_outpost_destroyed = outpost_hp == 0
 
+            enemy_outpost_occupy_state = None
+            if enemy_macro_state is not None:
+                enemy_outpost_occupy_state = (enemy_macro_state >> 6) & 0x03
+            enemy_outpost_occupied_by_us = enemy_outpost_occupy_state in (2, 3)
 
+            ally_fortress_occupy_state = None
+            if event_data is not None:
+                ally_fortress_occupy_state = (event_data >> 25) & 0x03
+            ally_fortress_occupied = ally_fortress_occupy_state in (1, 3)
 
-            # 两分钟还有两次，或者最后一分钟，直接开大
-            if (0 < stage_remain_time < 120 and double_vulnerability_chance == 2) or (0 < stage_remain_time < 60 and double_vulnerability_chance > 0):
-                print("请求双倍触发")
-                if double_vulnerability_chance > 0 and opponent_double_vulnerability == 0:
-                    time_e = time.time()
-                    # 发送时间间隔为10秒
-                    if time_e - time_s > 10:
-                        print("请求双倍触发")
-                        data = build_data_decision(chances_flag, state)
-                        packet, seq = build_send_packet(data, seq, [0x03, 0x01])
-                        # print(packet.hex(),chances_flag,state)
-                        ser1.write(packet)
-                        print("请求成功", chances_flag)
-                        # 更新标志位
-                        chances_flag += 1
+            dart_launched = dart_launch_count > 0 or dart_hit_count > 0
+            dart_hit_base_first_or_second = dart_last_hit_target in (2, 3, 4, 5) and dart_hit_count in (1, 2)
 
-                        time_s = time.time()
+            base_hp_low = base_hp is not None and base_hp < base_hp_max * 0.75
+            ally_alive_count = 0
+            for key in ("3", "4", "7"):
+                hp_value = ally_robot_hp.get(key)
+                if hp_value is not None and hp_value > 0:
+                    ally_alive_count += 1
+
+            enemy_ground_boost_high = is_enemy_ground_boost_high()
+
+            trigger_reason = None
+            if double_vulnerability_chance > 0:
+                if ally_outpost_destroyed is False:
+                    if enemy_outpost_occupied_by_us:
+                        trigger_reason = "enemy_outpost_occupy"
+                    else:
+                        if dart_launched:
+                            trigger_reason = "dart_launched"
+                        elif enemy_ground_boost_high:
+                            trigger_reason = "enemy_ground_boost_high"
+
+                if trigger_reason is None and ally_outpost_destroyed is True:
+                    if dart_hit_base_first_or_second:
+                        trigger_reason = "dart_hit_base"
+
+                if trigger_reason is None and ally_fortress_occupied:
+                    trigger_reason = "ally_fortress_occupied"
+
+                if trigger_reason is None and (ally_fortress_occupy_state is not None and not ally_fortress_occupied):
+                    if base_hp_low and ally_alive_count >= 2:
+                        trigger_reason = "base_low_alive_enough"
+
+                if trigger_reason is None and stage_remain_time > 0:
+                    time_left = stage_remain_time if stage_remain_time <= double_vuln_window_sec else None
+                    if time_left is not None and double_vulnerability_chance == 2 and time_left <= double_vuln_first_fallback_sec:
+                        trigger_reason = "time_fallback_first"
+                    elif time_left is not None and double_vulnerability_chance == 1 and time_left <= double_vuln_second_fallback_sec:
+                        trigger_reason = "time_fallback_second"
+
+            if trigger_reason:
+                try_send_double_vulnerability(trigger_reason)
 
             # 如果获取到敌方密钥，自动发送验证密钥
             if data_parse.enemy_password and data_parse.enemy_password != last_password_sent:
@@ -853,11 +945,20 @@ def ser_receive():
     global base_hp_last
     global base_hp_drop_time
     global base_hp_drop_handled
+    global outpost_hp
+    global ally_robot_hp
+    global event_data
+    global dart_last_hit_target
+    global dart_hit_count
+    global dart_selected_target
+    global dart_latest_launch_cmd_time
     progress_cmd_id = [0x02, 0x0C]  # 雷达标记进度
     vulnerability_cmd_id = [0x02, 0x0E]  # 雷达信息 (双倍易伤/加密等级)
     target_cmd_id = [0x01, 0x05]  # 飞镖目标
+    event_cmd_id = [0x01, 0x04]  # 场地事件数据
     game_state_cmd_id = [0x00, 0x01]  # 比赛状态
     base_hp_cmd_id = [0x00, 0x03]  # 己方基地血量
+    dart_client_cmd_id = [0x02, 0x0B]  # 飞镖选手端指令数据
     buffer = b''  # 初始化缓冲区
     while True:
         # 从串口读取数据
@@ -891,10 +992,14 @@ def ser_receive():
                 vulnerability_result = receive_packet(packet_data, vulnerability_cmd_id, info=False)
                 # 解析飞镖目标
                 target_result = receive_packet(packet_data, target_cmd_id, info=False)
+                # 解析场地事件
+                event_result = receive_packet(packet_data, event_cmd_id, info=False)
                 # 解析比赛状态
                 game_status_result = receive_packet(packet_data, game_state_cmd_id, info=False)
                 # 解析我方基地血量
                 base_hp_result = receive_packet(packet_data, base_hp_cmd_id, info=False)
+                # 解析飞镖选手端指令
+                dart_client_cmd_result = receive_packet(packet_data, dart_client_cmd_id, info=False)
                 # 0x0A01-0x0A06 已通过 radio_py 无线链路解析，不在串口中重复解析
 
 
@@ -923,9 +1028,26 @@ def ser_receive():
                 if target_result is not None:
                     received_cmd_id3, received_data3, received_seq3 = target_result
                     # dart_info_t: byte0=dart_remaining_time, byte1-2=dart_info (uint16)
-                    # bit 6-8 of dart_info = 飞镖选定目标
-                    dart_info = received_data3[1] | (received_data3[2] << 8)
-                    target = (dart_info >> 6) & 0x07
+                    # bit 0-2: 最近一次己方飞镖击中的目标
+                    # bit 3-5: 对方最近被击中的目标累计被击中计次数
+                    # bit 6-8: 飞镖选定目标
+                    if len(received_data3) >= 3:
+                        dart_info = received_data3[1] | (received_data3[2] << 8)
+                        dart_last_hit_target = dart_info & 0x07
+                        dart_hit_count = (dart_info >> 3) & 0x07
+                        dart_selected_target = (dart_info >> 6) & 0x07
+                        target = dart_selected_target
+                if event_result is not None:
+                    received_cmd_id_event, received_data_event, received_seq_event = event_result
+                    if len(received_data_event) >= 4:
+                        event_data = int.from_bytes(received_data_event[:4], byteorder='little', signed=False)
+                if dart_client_cmd_result is not None:
+                    received_cmd_id_dart, received_data_dart, received_seq_dart = dart_client_cmd_result
+                    if len(received_data_dart) >= 6:
+                        dart_latest_launch_cmd_time = int.from_bytes(received_data_dart[4:6], byteorder='little', signed=False)
+                        if dart_latest_launch_cmd_time != 0 and dart_latest_launch_cmd_time != last_dart_launch_cmd_time:
+                            dart_launch_count += 1
+                            last_dart_launch_cmd_time = dart_latest_launch_cmd_time
                 if game_status_result is not None:
                     received_cmd_id4, received_data4, received_seq4 = game_status_result
                     stage_remain_time_bytes = received_data4[1:3]
@@ -935,6 +1057,14 @@ def ser_receive():
                 if base_hp_result is not None:
                     received_cmd_id5, received_data5, received_seq5 = base_hp_result
                     if len(received_data5) >= 16:
+                        ally_robot_hp = {
+                            "1": int.from_bytes(received_data5[0:2], byteorder='little', signed=False),
+                            "2": int.from_bytes(received_data5[2:4], byteorder='little', signed=False),
+                            "3": int.from_bytes(received_data5[4:6], byteorder='little', signed=False),
+                            "4": int.from_bytes(received_data5[6:8], byteorder='little', signed=False),
+                            "7": int.from_bytes(received_data5[10:12], byteorder='little', signed=False),
+                        }
+                        outpost_hp = int.from_bytes(received_data5[12:14], byteorder='little', signed=False)
                         base_hp = int.from_bytes(received_data5[14:16], byteorder='little', signed=False)
                         if base_hp_last is not None and base_hp < base_hp_last:
                             base_hp_drop_time = time.time()
