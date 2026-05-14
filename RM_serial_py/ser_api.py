@@ -108,7 +108,7 @@ def _append_robot_position(data, pos_x, pos_y):
 
 
 # 0x0305 map_robot_data_t 字段顺序：对方1,2,3,4,6,7 + 己方1,2,3,4,6,7
-def build_data_map_robot(send_map, state):
+def build_data_map_robot(send_map: dict[str, tuple[float, float]], state: str)-> bytearray:
     data = bytearray()
     enemy_prefix = 'B' if state == 'R' else 'R'
     ally_prefix = 'R' if state == 'R' else 'B'
@@ -188,7 +188,7 @@ def build_send_packet(data, seq, cmd_id):
     frame_tail = bytearray()
     # 帧尾CRC16校验
     frame_tail.extend(struct.pack('H', Get_CRC16_Check_Sum(frame_header + cmd_id + data,
-                                                           len(frame_header + cmd_id + data) + 1)))
+                                                           len(frame_header + cmd_id + data))))
     packet = frame_header + cmd_id + data + frame_tail
     return packet, (seq + 1) % 256
 
