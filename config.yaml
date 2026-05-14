@@ -19,7 +19,7 @@ alert:
   sentry_warning_cmd_id: 0x0200
 
 serial: # 串口
-  port: '/dev/ttyUSB0' 
+  port: '/dev/ttyCH341USB0' 
   baudrate: 115200
   timeout: 1
 
