@@ -14,7 +14,7 @@ import argparse
 import socket
 import time
 
-from comm_protocol import (
+from radio_py.radar_protocol import (
     AirPayloadExtractor,
     DecodedFrame,
     INFO_ACCESS_CODE,
@@ -28,7 +28,7 @@ UDP_IP = "127.0.0.1"
 UDP_PORT = 55557
 
 # 全局变量存储最新位置数据
-radio_positions = {}
+radio_positions: dict[str, tuple[float, float]] = {}
 last_update_time = {}
 # 全局变量存储敌方密钥
 enemy_password = ''
@@ -37,7 +37,7 @@ enemy_hp = {}
 enemy_bullet = {}
 enemy_boosts = {}
 enemy_macro_state = None
-robot_mapping = {
+robot_mapping: dict[str, str] = {
     "hero": "R1",
     "engineer": "R2",
     "infantry3": "R3",
@@ -45,7 +45,7 @@ robot_mapping = {
     "aerial": "R5",
     "sentry": "R7"
 }
-CN_NAMES = {
+CN_NAMES: dict[str, str] = {
     "hero": "英雄",
     "engineer": "工程",
     "infantry3": "步兵3",
@@ -129,7 +129,8 @@ def main() -> None:
                     decoded = parse_serial_frame(raw_frame)
                     seen.add(decoded.cmd_id)
                     if not args.quiet:
-                        print(format_decoded(decoded))
+                        format_decoded(decoded)
+                        #print(format_decoded(decoded))
 
                     # 解析敌方位置数据并存储
                     if decoded.cmd_id == 0x0A01:
