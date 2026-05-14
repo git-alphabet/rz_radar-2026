@@ -150,3 +150,5 @@ docker/*.sh
 .vscode/
 
 *.pdf
+
+.claude/
