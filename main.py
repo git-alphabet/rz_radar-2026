@@ -12,6 +12,7 @@ from information_ui import draw_information_ui, draw_enemy_info
 from hik_camera import call_back_get_image, start_grab_and_get_data_size, close_and_destroy_device, set_Value, \
     get_Value, image_control
 import sys
+import subprocess
 if sys.platform.startswith("win"):    
     sys.path.append("./MvImport")
     from MvImport.MvCameraControl_class import *
@@ -30,6 +31,11 @@ from radio_py import data_parse
 from radio_py.data_parse import radio_positions, last_update_time, enemy_hp, enemy_bullet, enemy_boosts, enemy_macro_state
 with open("config.yaml", "r", encoding="utf-8") as f:  # 指定 UTF-8 编码
     config = yaml.safe_load(f)
+
+# 从配置中提取地图物理尺寸（默认2800x1500）
+map_size = config['global'].get('map_size', [2800, 1500])
+MAP_WIDTH_CM = map_size[0]
+MAP_HEIGHT_CM = map_size[1]
 
 
 RADAR_POS_CMD_ID = [0x0A, 0x01]
@@ -583,19 +589,19 @@ def ser_send():
     # 发送蓝方机器人坐标
     def send_point_B(send_name, data_source):
         # 转换为地图坐标系
-        filtered_xyz = (2800 - data_source[send_name][1], data_source[send_name][0])
+        filtered_xyz = (MAP_WIDTH_CM - data_source[send_name][1], data_source[send_name][0])
         # 转换为裁判系统单位M
         ser_x = int(filtered_xyz[0]) * 10 / 10
-        ser_y = int(1500 - filtered_xyz[1]) * 10 / 10
+        ser_y = int(MAP_HEIGHT_CM - filtered_xyz[1]) * 10 / 10
         return ser_x, ser_y
 
     # 发送红方机器人坐标
     def send_point_R(send_name, data_source):
         # 转换为地图坐标系
-        filtered_xyz = (data_source[send_name][1], 1500 - data_source[send_name][0])
+        filtered_xyz = (data_source[send_name][1], MAP_HEIGHT_CM - data_source[send_name][0])
         # 转换为裁判系统单位M
         ser_x = int(filtered_xyz[0]) * 10 / 10
-        ser_y = int(1500 - filtered_xyz[1]) * 10 / 10
+        ser_y = int(MAP_HEIGHT_CM - filtered_xyz[1]) * 10 / 10
         return ser_x, ser_y
 
     # 发送盲区预测点坐标
@@ -626,16 +632,6 @@ def ser_send():
     update_time = 0  # 上次预测点更新时间
     send_count = 0  # 信道占用数，上限为4
     send_map_template = {name: (0, 0) for name in ALL_GROUND_ROBOTS}
-
-    def update_send_map_by_detection(send_map, all_filter_data):
-        # 先把双方识别结果都同步到 send_map（裁判协议最终仍按 state 取对应字段）
-        for robot_name in ALL_GROUND_ROBOTS:
-            if not all_filter_data.get(robot_name, False):
-                continue
-            if robot_name[0] == 'B':
-                send_map[robot_name] = send_point_B(robot_name, all_filter_data)
-            else:
-                send_map[robot_name] = send_point_R(robot_name, all_filter_data)
 
     def is_enemy_ground_boost_high():
         if not enemy_boosts:
@@ -693,106 +689,44 @@ def ser_send():
         send_count = 0  # 重置信道占用数
         try:
             send_map = send_map_template.copy()
-            all_filter_data = filter.get_all_data()
-            combined_data = all_filter_data.copy()
-            # 根据配置决定是否使用无线链路敌方位置数据
+            vision_data = filter.get_all_data()
+            
+            # 解析无线电敌方数据，并转换为敌方对应的 robot_name 键(例如当我们是R时，将获取的R1转为B1)
+            radio_data = {}
             if config['global'].get('use_official_enemy_pos', False):
                 timeout = config['global'].get('official_enemy_pos_timeout', 2.0)
-                # radio_positions 的 key 是 R1-R7（己方视角），需映射到敌方 key
-                remapped_positions = {}
-                remapped_times = {}
                 for k, v in radio_positions.items():
                     if k.startswith('R'):
                         idx = k[1:]
                         new_key = f"B{idx}" if state == 'R' else f"R{idx}"
-                        remapped_positions[new_key] = v
-                        if k in last_update_time:
-                            remapped_times[new_key] = last_update_time[k]
-                for robot in remapped_positions:
-                    if robot in remapped_times and time.time() - remapped_times[robot] < timeout:
-                        combined_data[robot] = remapped_positions[robot]
-            update_send_map_by_detection(send_map, all_filter_data)
-            if state == 'R':
-                if not guess_list.get('B1'):
-                    if combined_data.get('B1', False):
-                        send_map['B1'] = send_point_B('B1', combined_data)
-                else:
-                    send_map['B1'] = (0, 0)
+                        if k in last_update_time and time.time() - last_update_time[k] < timeout:
+                            radio_data[new_key] = v
 
-                if not guess_list.get('B2'):
-                    if combined_data.get('B2', False):
-                        send_map['B2'] = send_point_B('B2', combined_data)
+            # 遍历所有地面机器人，确定最终发送给裁判系统的物理坐标点
+            for robot_name in ALL_GROUND_ROBOTS:
+                is_enemy = (state == 'R' and robot_name.startswith('B')) or (state == 'B' and robot_name.startswith('R'))
+                
+                # 若敌方单位处于盲区预测状态
+                if is_enemy and guess_list.get(robot_name, False):
+                    # 只有哨兵需要发预测点数据进行“点灯”
+                    if robot_name.endswith('7'):
+                        send_map[robot_name] = send_point_guess(robot_name, guess_time_limit)
+                    else:
+                        send_map[robot_name] = (0, 0)
                 else:
-                    send_map['B2'] = (0, 0)
-
-                # 步兵3号
-                if not guess_list.get('B3'):
-                    if combined_data.get('B3', False):
-                        send_map['B3'] = send_point_B('B3', combined_data)
-                else:
-                    send_map['B3'] = (0, 0)
-
-                # 步兵4号
-                if not guess_list.get('B4'):
-                    if combined_data.get('B4', False):
-                        send_map['B4'] = send_point_B('B4', combined_data)
-                else:
-                    send_map['B4'] = (0, 0)
-
-                if not guess_list.get('B5'):
-                    if combined_data.get('B5', False):
-                        send_map['B5'] = send_point_B('B5', combined_data)
-                else:
-                    send_map['B5'] = (0, 0)
-
-                # 哨兵
-                if not guess_list.get('B7'):
-                    if combined_data.get('B7', False):
-                        send_map['B7'] = send_point_B('B7', combined_data)
-                else:
-                    # 未识别到哨兵，进行盲区预测
-                    send_map['B7'] = send_point_guess('B7', guess_time_limit)
-
-            if state == 'B':
-                if not guess_list.get('R1'):
-                    if combined_data.get('R1', False):
-                        send_map['R1'] = send_point_R('R1', combined_data)
-                else:
-                    send_map['R1'] = (0, 0)
-
-                if not guess_list.get('R2'):
-                    if combined_data.get('R2', False):
-                        send_map['R2'] = send_point_R('R2', combined_data)
-                else:
-                    send_map['R2'] = (0, 0)
-
-                # 步兵3号
-                if not guess_list.get('R3'):
-                    if combined_data.get('R3', False):
-                        send_map['R3'] = send_point_R('R3', combined_data)
-                else:
-                    send_map['R3'] = (0, 0)
-
-                # 步兵4号
-                if not guess_list.get('R4'):
-                    if combined_data.get('R4', False):
-                        send_map['R4'] = send_point_R('R4', combined_data)
-                else:
-                    send_map['R4'] = (0, 0)
-
-                if not guess_list.get('R5'):
-                    if combined_data.get('R5', False):
-                        send_map['R5'] = send_point_R('R5', combined_data)
-                else:
-                    send_map['R5'] = (0, 0)
-
-                # 哨兵
-                if not guess_list.get('R7'):
-                    if combined_data.get('R7', False):
-                        send_map['R7'] = send_point_R('R7', combined_data)
-                else:
-                    # 未识别到哨兵，进行盲区预测
-                    send_map['R7'] = send_point_guess('R7', guess_time_limit)
+                    # 1. 优先使用无线电的裁判系统物理坐标 (最高优先级)
+                    if robot_name in radio_data:
+                        x_cm, y_cm = radio_data[robot_name]
+                        send_map[robot_name] = (int(x_cm), int(y_cm))
+                    # 2. 无线电未获取到，使用本端视觉识别数据 (将像素坐标转换回裁判系统坐标)
+                    elif vision_data.get(robot_name, False):
+                        if robot_name[0] == 'B':
+                            send_map[robot_name] = send_point_B(robot_name, vision_data)
+                        else:
+                            send_map[robot_name] = send_point_R(robot_name, vision_data)
+                    # 3. 都没有数据时填0
+                    else:
+                        send_map[robot_name] = (0, 0)
 
             # 0x0305 发送双方位置到选手端小地图
             minimap_data = build_data_map_robot(send_map, state)
@@ -1110,12 +1044,13 @@ else:
     print("跳过串口接收线程初始化")
 
 
-# 环境不兼容，该部分单独一个进程
-# # 无线电接收线程
-# if config['global']['use_radio']:
-#     thread_radio_receive = threading.Thread(target=radio_recv.main, daemon=True)
-#     thread_radio_receive.start()
-
+# 环境不兼容，该部分单独一个进程启动 GNU Radio
+if config['global'].get('use_radio_gr', False):
+    try:
+        gr_process = subprocess.Popen(["python3", "radio_py/radio.py"])
+        print("已启动 GNU Radio 接收进程")
+    except Exception as e:
+        print(f"启动 GNU Radio 失败: {e}")
 
 # 无线电解析线程
 if config['global']['use_radio']:
@@ -1230,25 +1165,51 @@ while True:
 
     # 获取所有识别到的机器人坐标
     all_filter_data = filter.get_all_data()
-    # print(all_filter_data_name)
-    if all_filter_data != {}:
-        for name, xyxy in all_filter_data.items():
-            # print(name, xyxy)
+    
+    # 解析无线电敌方数据
+    radio_data = {}
+    if config['global'].get('use_official_enemy_pos', False):
+        timeout = config['global'].get('official_enemy_pos_timeout', 2.0)
+        for k, v in radio_positions.items():
+            if k.startswith('R'):
+                idx = k[1:]
+                new_key = f"B{idx}" if state == 'R' else f"R{idx}"
+                if k in last_update_time and time.time() - last_update_time[k] < timeout:
+                    radio_data[new_key] = v
+
+    # 结合无线电数据并在本地 UI 画图显示
+    combined_draw_data = all_filter_data.copy()
+    for robot_name, (x_cm, y_cm) in radio_data.items():
+        # 无线电优先级最高，直接覆盖视觉数据
+        # 将裁判系统的 cm 坐标反向转换为掩码图像上的像素坐标 (与 send_point 的转换互逆)
+        if robot_name[0] == 'B':
+            x_mask = y_cm
+            y_mask = MAP_WIDTH_CM - x_cm
+        else:
+            x_mask = MAP_HEIGHT_CM - y_cm
+            y_mask = x_cm
+        combined_draw_data[robot_name] = (x_mask, y_mask)
+
+    if combined_draw_data != {}:
+        for name, xyxy in combined_draw_data.items():
             if xyxy is not None:
                 if name[0] == "R":
                     color_m = (0, 0, 255)
                 else:
                     color_m = (255, 0, 0)
                 if state == 'R':
-                    filtered_xyz = (2800 - xyxy[1], xyxy[0])  # 缩放坐标到地图图像
+                    filtered_xyz = (MAP_WIDTH_CM - xyxy[1], xyxy[0])  # 缩放坐标到地图图像
                 else:
-                    filtered_xyz = (xyxy[1], 1500 - xyxy[0])  # 缩放坐标到地图图像
+                    filtered_xyz = (xyxy[1], MAP_HEIGHT_CM - xyxy[0])  # 缩放坐标到地图图像
+                
+                display_name = f"({name})" if name in radio_data else str(name)
+
                 cv2.circle(map, (int(filtered_xyz[0]), int(filtered_xyz[1])), 15, color_m, -1)  # 绘制圆
-                cv2.putText(map, str(name),
+                cv2.putText(map, display_name,
                             (int(filtered_xyz[0]) - 5, int(filtered_xyz[1]) + 5),
                             cv2.FONT_HERSHEY_SIMPLEX, 2.5, (255, 255, 255), 5)
                 ser_x = int(filtered_xyz[0]) * 10 / 10
-                ser_y = int(1500 - filtered_xyz[1]) * 10 / 10
+                ser_y = int(MAP_HEIGHT_CM - filtered_xyz[1]) * 10 / 10
                 cv2.putText(map, "(" + str(ser_x) + "," + str(ser_y) + ")",
                             (int(filtered_xyz[0]) - 100, int(filtered_xyz[1]) + 60),
                             cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 255, 255), 4)
