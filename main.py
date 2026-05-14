@@ -26,7 +26,7 @@ from RM_serial_py.ser_api import build_send_packet, receive_packet, Radar_decisi
     build_data_decision, build_data_map_robot, build_data_gimbaler_client
 import yaml
 
-from radio_py import data_parse, radio_recv
+from radio_py import data_parse
 from radio_py.data_parse import radio_positions, last_update_time, enemy_hp, enemy_bullet, enemy_boosts, enemy_macro_state
 with open("config.yaml", "r", encoding="utf-8") as f:  # 指定 UTF-8 编码
     config = yaml.safe_load(f)
@@ -695,13 +695,22 @@ def ser_send():
             send_map = send_map_template.copy()
             all_filter_data = filter.get_all_data()
             combined_data = all_filter_data.copy()
-            import time
             # 根据配置决定是否使用无线链路敌方位置数据
             if config['global'].get('use_official_enemy_pos', False):
                 timeout = config['global'].get('official_enemy_pos_timeout', 2.0)
-                for robot in radio_positions:
-                    if robot in last_update_time and time.time() - last_update_time[robot] < timeout:
-                        combined_data[robot] = radio_positions[robot]
+                # radio_positions 的 key 是 R1-R7（己方视角），需映射到敌方 key
+                remapped_positions = {}
+                remapped_times = {}
+                for k, v in radio_positions.items():
+                    if k.startswith('R'):
+                        idx = k[1:]
+                        new_key = f"B{idx}" if state == 'R' else f"R{idx}"
+                        remapped_positions[new_key] = v
+                        if k in last_update_time:
+                            remapped_times[new_key] = last_update_time[k]
+                for robot in remapped_positions:
+                    if robot in remapped_times and time.time() - remapped_times[robot] < timeout:
+                        combined_data[robot] = remapped_positions[robot]
             update_send_map_by_detection(send_map, all_filter_data)
             if state == 'R':
                 if not guess_list.get('B1'):
@@ -737,12 +746,12 @@ def ser_send():
                     send_map['B5'] = (0, 0)
 
                 # 哨兵
-                if guess_list.get('B7'):
-                    send_map['B7'] = send_point_guess('B7', guess_time_limit)
-                # 未识别到哨兵，进行盲区预测
-                else:
+                if not guess_list.get('B7'):
                     if combined_data.get('B7', False):
                         send_map['B7'] = send_point_B('B7', combined_data)
+                else:
+                    # 未识别到哨兵，进行盲区预测
+                    send_map['B7'] = send_point_guess('B7', guess_time_limit)
 
             if state == 'B':
                 if not guess_list.get('R1'):
@@ -778,12 +787,12 @@ def ser_send():
                     send_map['R5'] = (0, 0)
 
                 # 哨兵
-                if guess_list.get('R7'):
-                    send_map['R7'] = send_point_guess('R7', guess_time_limit)
-                # 未识别到哨兵，进行盲区预测
-                else:
+                if not guess_list.get('R7'):
                     if combined_data.get('R7', False):
                         send_map['R7'] = send_point_R('R7', combined_data)
+                else:
+                    # 未识别到哨兵，进行盲区预测
+                    send_map['R7'] = send_point_guess('R7', guess_time_limit)
 
             # 0x0305 发送双方位置到选手端小地图
             minimap_data = build_data_map_robot(send_map, state)
@@ -791,7 +800,6 @@ def ser_send():
             ser1.write(minimap_packet)
 
             time.sleep(0.2)
-            print(send_map, seq)
             # 基地掉血且敌方地面兵种接近时告警哨兵
             if alert_enabled and alert_base_position:
                 try:
@@ -849,8 +857,6 @@ def ser_send():
             send_gimbaler_data = build_data_gimbaler_client(double_vulnerability_chance, state, opponent_double_vulnerability)
             send_gimbaler_packet, seq = build_send_packet(send_gimbaler_data, seq, [0x03, 0x08])
             ser1.write(send_gimbaler_packet)
-            print("发送云台手")
-            print(target)
 
             if pending_double_vulnerability and opponent_double_vulnerability == 0:
                 try_send_double_vulnerability(pending_double_vulnerability_reason or "pending")
@@ -1147,6 +1153,8 @@ img_y = img0.shape[0]
 img_x = img0.shape[1]
 print(img0.shape)
 
+last_fps_print = 0.0
+
 while True:
     # 刷新裁判系统信息UI图像
     information_ui_show = information_ui.copy()
@@ -1247,7 +1255,10 @@ while True:
 
     te = time.time()
     t_p = te - ts
-    print("fps:", 1 / t_p)  # 打印帧率
+    fps = 1 / t_p if t_p > 0 else 0.0
+    if te - last_fps_print >= 1.0:
+        print("fps:", fps)
+        last_fps_print = te
     # 绘制UI
     _ = draw_information_ui(vulnerability, state, information_ui_show, ally_vulnerability)
     cv2.putText(information_ui_show, "vulnerability_chances: " + str(double_vulnerability_chance),
