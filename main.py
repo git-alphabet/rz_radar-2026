@@ -706,20 +706,20 @@ def ser_send():
             for robot_name in ALL_GROUND_ROBOTS:
                 is_enemy = (state == 'R' and robot_name.startswith('B')) or (state == 'B' and robot_name.startswith('R'))
                 
-                # 若敌方单位处于盲区预测状态
-                if is_enemy and guess_list.get(robot_name, False):
+                # 1. 优先使用无线电的裁判系统物理坐标 (最高优先级)
+                if robot_name in radio_data:
+                    x_cm, y_cm = radio_data[robot_name]
+                    send_map[robot_name] = (int(x_cm), int(y_cm))
+                # 若敌方单位没有视觉也没有无线电数据，处于盲区预测状态
+                elif is_enemy and guess_list.get(robot_name, False):
                     # 只有哨兵需要发预测点数据进行“点灯”
                     if robot_name.endswith('7'):
                         send_map[robot_name] = send_point_guess(robot_name, guess_time_limit)
                     else:
                         send_map[robot_name] = (0, 0)
                 else:
-                    # 1. 优先使用无线电的裁判系统物理坐标 (最高优先级)
-                    if robot_name in radio_data:
-                        x_cm, y_cm = radio_data[robot_name]
-                        send_map[robot_name] = (int(x_cm), int(y_cm))
                     # 2. 无线电未获取到，使用本端视觉识别数据 (将像素坐标转换回裁判系统坐标)
-                    elif vision_data.get(robot_name, False):
+                    if vision_data.get(robot_name, False):
                         if robot_name[0] == 'B':
                             send_map[robot_name] = send_point_B(robot_name, vision_data)
                         else:
