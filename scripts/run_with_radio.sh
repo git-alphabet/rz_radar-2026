@@ -44,16 +44,23 @@ if $ENABLE_STREAM; then
 fi
 
 cleanup() {
+	echo -e "\nShutting down all started processes..."
 	container_id=$(docker compose -f docker/compose.dev.yml ps -q radar 2>/dev/null || true)
 	if [[ -n "$container_id" ]]; then
-		docker compose -f docker/compose.dev.yml exec -T radar bash -lc "pkill -f 'python3 main.py' || true" >/dev/null 2>&1 || true
+		docker compose -f docker/compose.dev.yml exec -T radar bash -lc "pkill -2 -f 'python3 main.py' || true" >/dev/null 2>&1 || true
+		sleep 0.5
+		docker compose -f docker/compose.dev.yml exec -T radar bash -lc "pkill -9 -f 'python3 main.py' || true" >/dev/null 2>&1 || true
 	fi
 	for pid in "$STREAM_PID" "$RADIO_PID"; do
 		if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
 			kill "$pid" 2>/dev/null || true
-			wait "$pid" 2>/dev/null || true
+			sleep 0.5
+			kill -9 "$pid" 2>/dev/null || true
 		fi
 	done
+	
+	# Optional: if you also want to stop the container, uncomment the next line
+	# docker compose -f docker/compose.dev.yml stop radar 2>/dev/null || true
 }
 
 trap cleanup EXIT INT TERM
