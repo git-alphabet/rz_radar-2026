@@ -152,3 +152,4 @@ docker/*.sh
 *.pdf
 
 .claude/
+bags/

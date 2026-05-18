@@ -24,6 +24,10 @@ RADIO_LOG="$LOG_DIR/radio_$ts.log"
 STREAM_LOG="$LOG_DIR/stream_$ts.log"
 MAIN_LOG="$LOG_DIR/main_$ts.log"
 
+# Read record_iq from config.yaml
+_record_iq=$(python3 -c "import yaml; print(yaml.safe_load(open('config.yaml'))['global'].get('record_iq', False))" 2>/dev/null || echo "False")
+export RECORD_IQ=$([ "$_record_iq" = "True" ] && echo "1" || echo "0")
+
 echo "Radio log: $RADIO_LOG"
 if $ENABLE_STREAM; then
 	echo "Stream log: $STREAM_LOG"
