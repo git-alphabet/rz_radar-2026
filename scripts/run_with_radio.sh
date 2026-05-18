@@ -7,7 +7,7 @@ cd "$ROOT_DIR"
 LOG_DIR="${LOG_DIR:-$ROOT_DIR/logs}"
 mkdir -p "$LOG_DIR"
 
-ENABLE_STREAM=true
+ENABLE_STREAM=false
 
 for arg in "$@"; do
 	case "$arg" in
