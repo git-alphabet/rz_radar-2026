@@ -3,6 +3,7 @@
 # 盲区预测
 # 卡尔曼滤波
 # config
+import atexit
 import datetime
 import threading
 import time
@@ -29,8 +30,18 @@ import yaml
 
 from radio_py import data_parse
 from radio_py.data_parse import radio_positions, last_update_time, enemy_hp, enemy_bullet, enemy_boosts, enemy_macro_state
+from recorder import init_recorder, get_recorder
 with open("config.yaml", "r", encoding="utf-8") as f:  # 指定 UTF-8 编码
     config = yaml.safe_load(f)
+
+# 初始化异步录制器
+if config['global'].get('enable_recording', False):
+    _ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    init_recorder(f"logs/recording_{_ts}")
+    atexit.register(lambda: get_recorder().stop() if get_recorder() else None)
+    print(f"Recording enabled: logs/recording_{_ts} (.jsonl + .mp4)")
+else:
+    print("Recording disabled")
 
 # 从配置中提取地图物理尺寸（默认2800x1500）
 map_size = config['global'].get('map_size', [2800, 1500])
@@ -672,6 +683,9 @@ def ser_send():
         packet, seq = build_send_packet(data, seq, [0x03, 0x01])
         ser1.write(packet)
         print(f"双倍易伤请求: {reason}, flag={chances_flag}")
+        _rec = get_recorder()
+        if _rec:
+            _rec.record("double_vuln", {"reason": reason, "flag": chances_flag})
         chances_flag += 1
         time_s = now
         pending_double_vulnerability = False
@@ -732,6 +746,9 @@ def ser_send():
             minimap_data = build_data_map_robot(send_map, state)
             minimap_packet, seq = build_send_packet(minimap_data, seq, RADAR_MINIMAP_CMD_ID)
             ser1.write(minimap_packet)
+            _rec = get_recorder()
+            if _rec:
+                _rec.record("send_map", {k: list(v) for k, v in send_map.items()})
 
             time.sleep(0.2)
             # 基地掉血且敌方地面兵种接近时告警哨兵
@@ -770,6 +787,9 @@ def ser_send():
                             warning_data.extend(bytearray([1]))
                             warning_packet, seq = build_send_packet(warning_data, seq, [0x03, 0x01])
                             ser1.write(warning_packet)
+                            _rec = get_recorder()
+                            if _rec:
+                                _rec.record("sentry_warning", {"sender": sender_id, "receiver": receiver_id})
                             base_hp_drop_handled = True
                         elif now - base_hp_drop_time > alert_base_hp_drop_window_sec:
                             base_hp_drop_handled = True
@@ -1165,7 +1185,11 @@ while True:
 
     # 获取所有识别到的机器人坐标
     all_filter_data = filter.get_all_data()
-    
+    _rec = get_recorder()
+    if _rec:
+        _rec.record("vision", {k: list(v) for k, v in all_filter_data.items() if v})
+        _rec.record_frame(img0)
+
     # 解析无线电敌方数据
     radio_data = {}
     if config['global'].get('use_official_enemy_pos', False):

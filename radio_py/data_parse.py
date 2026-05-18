@@ -14,6 +14,8 @@ import argparse
 import socket
 import time
 
+from recorder import get_recorder
+
 from radio_py.radar_protocol import (
     AirPayloadExtractor,
     DecodedFrame,
@@ -131,6 +133,11 @@ def main() -> None:
                     if not args.quiet:
                         format_decoded(decoded)
                         #print(format_decoded(decoded))
+
+                    # 录制无线电接收数据
+                    _rec = get_recorder()
+                    if _rec:
+                        _rec.record("radio_rx", {"cmd": f"0x{decoded.cmd_id:04X}", "seq": decoded.seq})
 
                     # 解析敌方位置数据并存储
                     if decoded.cmd_id == 0x0A01:
