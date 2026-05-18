@@ -36,6 +36,7 @@ from gnuradio.eng_arg import eng_float, intx
 from gnuradio import eng_notation
 from gnuradio import iio
 from gnuradio import network
+import os
 import radio_epy_block_0 as epy_block_0  # embedded python block
 
 
@@ -488,6 +489,18 @@ class radio(gr.top_block, Qt.QWidget):
         self.connect((self.low_pass_filter_0, 0), (self.qtgui_time_sink_x_0_0, 0))
         self.connect((self.network_udp_source_0, 0), (self.blocks_uchar_to_float_0, 0))
         self.connect((self.network_udp_source_0, 0), (self.digital_gfsk_mod_0, 0))
+
+        # IQ raw recording (set RECORD_IQ=1 to enable)
+        if os.environ.get("RECORD_IQ", "0") == "1":
+            import datetime
+            iq_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "bags")
+            os.makedirs(iq_dir, exist_ok=True)
+            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            iq_path = os.path.join(iq_dir, f"iq_raw_{ts}.cf32")
+            self.iq_file_sink = blocks.file_sink(gr.sizeof_gr_complex, iq_path, False)
+            self.iq_file_sink.set_unbuffered(False)
+            self.connect((self.iio_pluto_source_0, 0), (self.iq_file_sink, 0))
+            print(f"IQ recording: {iq_path} (complex64, {int(self.samp_rate/1e3)}kHz)")
 
 
     def closeEvent(self, event):

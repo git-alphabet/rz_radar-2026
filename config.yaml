@@ -9,6 +9,7 @@ global:
   use_official_enemy_pos: True  # 是否优先使用无线链路敌方位置数据 (0x0A01) 代替雷达识别
   official_enemy_pos_timeout: 2.0  # 无线链路敌方位置数据超时时间 (秒)
   enable_recording: True  # 是否录制识别结果、发送数据到JSONL文件
+  record_iq: True  # 是否录制原始IQ数据 (.cf32, ~8MB/s @ 1MHz)
 
 alert:
   enabled: true

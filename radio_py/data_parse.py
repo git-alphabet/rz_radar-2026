@@ -137,7 +137,11 @@ def main() -> None:
                     # 录制无线电接收数据
                     _rec = get_recorder()
                     if _rec:
-                        _rec.record("radio_rx", {"cmd": f"0x{decoded.cmd_id:04X}", "seq": decoded.seq})
+                        _rec.record("radio_rx", {
+                            "cmd": f"0x{decoded.cmd_id:04X}",
+                            "seq": decoded.seq,
+                            "data": decoded.data,
+                        })
 
                     # 解析敌方位置数据并存储
                     if decoded.cmd_id == 0x0A01:
