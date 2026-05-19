@@ -9,11 +9,11 @@
 # GNU Radio version: 3.10.1.1
 
 from packaging.version import Version as StrictVersion
+import os
 
 if __name__ == '__main__':
     import ctypes
     import sys
-import os
     if sys.platform.startswith('linux'):
         try:
             x11 = ctypes.cdll.LoadLibrary('libX11.so')
