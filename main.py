@@ -1117,8 +1117,13 @@ if config['global'].get('use_radio_gr', False):
 
 # 无线电解析线程
 if config['global']['use_radio']:
-    thread_radio_parse = threading.Thread(target=data_parse.main, daemon=True)
-    thread_radio_parse.start()
+    radio_cfg = config.get('radio', {})
+    radio_host = radio_cfg.get('host', '127.0.0.1')
+    # start info wave listener
+    threading.Thread(target=data_parse.run_listener, args=(radio_host, radio_cfg.get('info_port', 55557), 'info', True), daemon=True).start()
+    # start jam wave listeners
+    for jam_port in radio_cfg.get('jam_ports', [55558, 55559, 55560]):
+        threading.Thread(target=data_parse.run_listener, args=(radio_host, jam_port, 'jam', True), daemon=True).start()
 
 # 串口发送线程
 if config['global']['use_serial']:

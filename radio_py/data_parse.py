@@ -103,13 +103,12 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> None:
+def run_listener(host: str, port: int, wave: str, quiet: bool) -> None:
     global enemy_password
     global enemy_password_time
     global enemy_macro_state
-    args = parse_args()
-    access_code = INFO_ACCESS_CODE if args.wave == "info" else JAM_ACCESS_CODE
-    expected = set(INFO_CMD_ORDER) if args.wave == "info" else {0x0A06}
+    access_code = INFO_ACCESS_CODE if wave == "info" else JAM_ACCESS_CODE
+    expected = set(INFO_CMD_ORDER) if wave == "info" else {0x0A06}
 
     air = AirPayloadExtractor(access_code)
     serial = SerialFrameExtractor()
@@ -118,9 +117,9 @@ def main() -> None:
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024 * 1024)
-    sock.bind((args.host, args.port))
+    sock.bind((host, port))
 
-    print(f"监听 UDP {args.host}:{args.port}, wave={args.wave}, access={access_code.hex().upper()}")
+    print(f"监听 UDP {host}:{port}, wave={wave}, access={access_code.hex().upper()}")
     try:
         while True:
             chunk, _ = sock.recvfrom(4096)
@@ -130,7 +129,7 @@ def main() -> None:
                 for raw_frame in frames:
                     decoded = parse_serial_frame(raw_frame)
                     seen.add(decoded.cmd_id)
-                    if not args.quiet:
+                    if not quiet:
                         format_decoded(decoded)
                         #print(format_decoded(decoded))
 
@@ -198,5 +197,11 @@ def main() -> None:
         sock.close()
 
 
-if __name__ == "__main__":
+
+def main() -> None:
+    args = parse_args()
+    run_listener(args.host, args.port, args.wave, args.quiet)
+
+if __name__ == '__main__':
     main()
+

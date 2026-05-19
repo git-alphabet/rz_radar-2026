@@ -4,7 +4,14 @@ import pmt
 
 
 class AccessCodeBitFrameExtractor(gr.basic_block):
-    def __init__(self):
+    def __init__(
+        self,
+        access_code_hex="2F6F4C74B914492E",
+        header_hex="000F000F",
+        frame_bytes=27,
+        bit_order="msb",
+        output_mode="bits",
+    ):
         gr.basic_block.__init__(
             self,
             name="Access Code Bit Frame Extractor",
@@ -13,12 +20,29 @@ class AccessCodeBitFrameExtractor(gr.basic_block):
         )
         self.set_tag_propagation_policy(gr.TPP_DONT)
 
-        self.access_bits = self._bytes_to_bits(bytes.fromhex("2F6F4C74B914492E"))
-        self.header_bits = self._bytes_to_bits(bytes.fromhex("000F000F"))
+        self.bit_order = self._normalize_choice(bit_order, "bit_order", ("msb", "lsb"))
+        self.output_mode = self._normalize_choice(
+            output_mode, "output_mode", ("bits", "bytes")
+        )
+        self.frame_bytes = int(frame_bytes)
+        if self.frame_bytes <= 0:
+            raise ValueError("frame_bytes must be positive")
+
+        self.access_bits = self._bytes_to_bits(
+            bytes.fromhex(self._normalize_hex(access_code_hex))
+        )
+        self.header_bits = self._bytes_to_bits(
+            bytes.fromhex(self._normalize_hex(header_hex))
+        )
         self.prefix_bits = np.concatenate((self.access_bits, self.header_bits))
-        self.frame_bits = 27 * 8
-        self.set_min_noutput_items(self.frame_bits)
-        self.set_output_multiple(self.frame_bits)
+        self.frame_bits = self.frame_bytes * 8
+        if len(self.prefix_bits) > self.frame_bits:
+            raise ValueError("access_code_hex plus header_hex is longer than frame_bytes")
+        self.output_items_per_frame = (
+            self.frame_bits if self.output_mode == "bits" else self.frame_bytes
+        )
+        self.set_min_noutput_items(self.output_items_per_frame)
+        self.set_output_multiple(self.output_items_per_frame)
         self.access_len = len(self.access_bits)
         self.header_start = self.access_len
         self.header_end = self.header_start + len(self.header_bits)
@@ -35,12 +59,42 @@ class AccessCodeBitFrameExtractor(gr.basic_block):
         self.last_output_start = -self.frame_bits
 
     @staticmethod
-    def _bytes_to_bits(data):
+    def _normalize_choice(value, name, allowed):
+        normalized = str(value).strip().lower()
+        if normalized not in allowed:
+            raise ValueError("{} must be one of {}".format(name, ", ".join(allowed)))
+        return normalized
+
+    @staticmethod
+    def _normalize_hex(value):
+        text = str(value).strip().replace(" ", "").replace("_", "")
+        if text.lower().startswith("0x"):
+            text = text[2:]
+        if len(text) % 2:
+            raise ValueError("hex strings must contain a whole number of bytes")
+        return text
+
+    def _bytes_to_bits(self, data):
         bits = []
         for byte in data:
-            for shift in range(7, -1, -1):
+            shifts = range(7, -1, -1) if self.bit_order == "msb" else range(8)
+            for shift in shifts:
                 bits.append((byte >> shift) & 1)
         return np.array(bits, dtype=np.uint8)
+
+    def _bits_to_bytes(self, bits):
+        packed = np.empty(len(bits) // 8, dtype=np.uint8)
+        for idx in range(len(packed)):
+            value = 0
+            chunk = bits[idx * 8:(idx + 1) * 8]
+            if self.bit_order == "msb":
+                for bit in chunk:
+                    value = (value << 1) | int(bit)
+            else:
+                for shift, bit in enumerate(chunk):
+                    value |= int(bit) << shift
+            packed[idx] = value
+        return packed
 
     def _hamming(self, abs_start, pattern):
         rel = abs_start - self.base_offset
@@ -92,7 +146,10 @@ class AccessCodeBitFrameExtractor(gr.basic_block):
             ))
             if header_errors <= self.max_header_errors:
                 frame[:len(self.prefix_bits)] = self.prefix_bits
-                output_frames.append(frame)
+                if self.output_mode == "bits":
+                    output_frames.append(frame)
+                else:
+                    output_frames.append(self._bits_to_bytes(frame))
                 self.last_output_start = start
 
         self.candidates = remaining

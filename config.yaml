@@ -20,6 +20,11 @@ alert:
   base_hp_drop_window_sec: 3.0
   sentry_warning_cmd_id: 0x0200
 
+radio: # 无线电UDP接收端口 (需与GNU Radio flowgraph一致)
+  host: '127.0.0.1'
+  info_port: 55557
+  jam_ports: [55558, 55559, 55560]
+
 serial: # 串口
   port: '/dev/ttyCH341USB0' 
   baudrate: 115200
