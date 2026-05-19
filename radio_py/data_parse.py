@@ -10,8 +10,8 @@ GFSK Demod -> Repack Bits BB(MSB_FIRST) -> UDP Sink。
 
 from __future__ import annotations
 
-import argparse
 import socket
+import threading
 import time
 
 from recorder import get_recorder
@@ -26,9 +26,6 @@ from radio_py.radar_protocol import (
     parse_serial_frame,
 )
 
-UDP_IP = "127.0.0.1"
-UDP_PORT = 55557
-
 # 全局变量存储最新位置数据
 radio_positions: dict[str, tuple[float, float]] = {}
 last_update_time = {}
@@ -39,6 +36,8 @@ enemy_hp = {}
 enemy_bullet = {}
 enemy_boosts = {}
 enemy_macro_state = None
+# 共享状态写入锁
+_radio_lock = threading.Lock()
 robot_mapping: dict[str, str] = {
     "hero": "R1",
     "engineer": "R2",
@@ -94,15 +93,6 @@ def format_decoded(frame: DecodedFrame) -> str:
     return "\n".join(lines)
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Parse recovered RoboMaster radar radio bytes from UDP.")
-    parser.add_argument("--host", default=UDP_IP)
-    parser.add_argument("--port", type=int, default=UDP_PORT)
-    parser.add_argument("--wave", choices=("info", "jam"), default="info")
-    parser.add_argument("--quiet", action="store_true", help="only print cycle frequency")
-    return parser.parse_args()
-
-
 def run_listener(host: str, port: int, wave: str, quiet: bool) -> None:
     global enemy_password
     global enemy_password_time
@@ -143,43 +133,44 @@ def run_listener(host: str, port: int, wave: str, quiet: bool) -> None:
                         })
 
                     # 解析敌方位置数据并存储
-                    if decoded.cmd_id == 0x0A01:
-                        for key in ("hero", "engineer", "infantry3", "infantry4", "aerial", "sentry"):
-                            value = decoded.data[key]
-                            robot = robot_mapping[key]
-                            radio_positions[robot] = (value['x_cm'], value['y_cm'])
-                            last_update_time[robot] = time.time()
+                    with _radio_lock:
+                        if decoded.cmd_id == 0x0A01:
+                            for key in ("hero", "engineer", "infantry3", "infantry4", "aerial", "sentry"):
+                                value = decoded.data[key]
+                                robot = robot_mapping[key]
+                                radio_positions[robot] = (value['x_cm'], value['y_cm'])
+                                last_update_time[robot] = time.time()
 
-                    if decoded.cmd_id == 0x0A02:
-                        enemy_hp["1"] = decoded.data["hero"]
-                        enemy_hp["2"] = decoded.data["engineer"]
-                        enemy_hp["3"] = decoded.data["infantry3"]
-                        enemy_hp["4"] = decoded.data["infantry4"]
-                        enemy_hp["7"] = decoded.data["sentry"]
+                        if decoded.cmd_id == 0x0A02:
+                            enemy_hp["1"] = decoded.data["hero"]
+                            enemy_hp["2"] = decoded.data["engineer"]
+                            enemy_hp["3"] = decoded.data["infantry3"]
+                            enemy_hp["4"] = decoded.data["infantry4"]
+                            enemy_hp["7"] = decoded.data["sentry"]
 
-                    if decoded.cmd_id == 0x0A03:
-                        enemy_bullet["1"] = decoded.data["hero"]
-                        enemy_bullet["3"] = decoded.data["infantry3"]
-                        enemy_bullet["4"] = decoded.data["infantry4"]
-                        enemy_bullet["6"] = decoded.data["aerial"]
-                        enemy_bullet["7"] = decoded.data["sentry"]
+                        if decoded.cmd_id == 0x0A03:
+                            enemy_bullet["1"] = decoded.data["hero"]
+                            enemy_bullet["3"] = decoded.data["infantry3"]
+                            enemy_bullet["4"] = decoded.data["infantry4"]
+                            enemy_bullet["6"] = decoded.data["aerial"]
+                            enemy_bullet["7"] = decoded.data["sentry"]
 
-                    if decoded.cmd_id == 0x0A05:
-                        enemy_boosts["1"] = decoded.data["hero"]
-                        enemy_boosts["2"] = decoded.data["engineer"]
-                        enemy_boosts["3"] = decoded.data["infantry3"]
-                        enemy_boosts["4"] = decoded.data["infantry4"]
-                        enemy_boosts["7"] = decoded.data["sentry"]
-                        enemy_boosts["sentry_posture"] = decoded.data["sentry_posture"]
+                        if decoded.cmd_id == 0x0A05:
+                            enemy_boosts["1"] = decoded.data["hero"]
+                            enemy_boosts["2"] = decoded.data["engineer"]
+                            enemy_boosts["3"] = decoded.data["infantry3"]
+                            enemy_boosts["4"] = decoded.data["infantry4"]
+                            enemy_boosts["7"] = decoded.data["sentry"]
+                            enemy_boosts["sentry_posture"] = decoded.data["sentry_posture"]
 
-                    if decoded.cmd_id == 0x0A04:
-                        enemy_macro_state = decoded.data["macro_state"]
+                        if decoded.cmd_id == 0x0A04:
+                            enemy_macro_state = decoded.data["macro_state"]
 
-                    # 解析敌方密钥并存储
-                    if decoded.cmd_id == 0x0A06:
-                        enemy_password = decoded.data['password']
-                        enemy_password_time = time.time()
-                        print(f"获取敌方密钥: {enemy_password}")
+                        # 解析敌方密钥并存储
+                        if decoded.cmd_id == 0x0A06:
+                            enemy_password = decoded.data['password']
+                            enemy_password_time = time.time()
+                            print(f"获取敌方密钥: {enemy_password}")
 
                     if expected.issubset(seen):
                         now = time.monotonic()
@@ -195,13 +186,4 @@ def run_listener(host: str, port: int, wave: str, quiet: bool) -> None:
         print("\n接收结束。")
     finally:
         sock.close()
-
-
-
-def main() -> None:
-    args = parse_args()
-    run_listener(args.host, args.port, args.wave, args.quiet)
-
-if __name__ == '__main__':
-    main()
 
