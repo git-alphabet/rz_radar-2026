@@ -50,11 +50,15 @@ paths:
 camera_params:
   exposure_time: 16000.0 # 曝光时间
   gain: 10.9 # 增益值
-  flip_mode: 'none' # 相机反转模式: none/horizontal/vertical/both
+  flip_mode: 'both' # 相机反转模式: none/horizontal/vertical/both
 
 kalman:
   process_noise: 1e-5
   measurement_noise: 1e-1
+
+password:
+  fixed_password: ''  # 固定密钥(6字节ASCII)，为空则使用无线电来源的敌方密钥
+  verify_interval: 10  # 固定密钥验证周期(秒)，0=禁用周期验证
 
 blind_zone:
   base_time: 3.0  # 基础预测时间
