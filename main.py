@@ -31,15 +31,38 @@ import yaml
 from radio_py import data_parse
 from radio_py.data_parse import radio_positions, last_update_time, enemy_hp, enemy_bullet, enemy_boosts, enemy_macro_state
 from recorder import init_recorder, get_recorder
+
+# 日志文件设置：同时输出到终端和 logs/ 目录
+class Tee:
+    def __init__(self, *streams):
+        self.streams = streams
+    def write(self, data):
+        for s in self.streams:
+            s.write(data)
+            s.flush()
+    def flush(self):
+        for s in self.streams:
+            s.flush()
+
+import os
+_log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+os.makedirs(_log_dir, exist_ok=True)
+_log_ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+_log_path = os.path.join(_log_dir, f"main_{_log_ts}.log")
+_log_file = open(_log_path, "w", encoding="utf-8")
+sys.stdout = Tee(sys.__stdout__, _log_file)
+sys.stderr = Tee(sys.__stderr__, _log_file)
+print(f"Log file: {_log_path}")
+
 with open("config.yaml", "r", encoding="utf-8") as f:  # 指定 UTF-8 编码
     config = yaml.safe_load(f)
 
 # 初始化异步录制器
 if config['global'].get('enable_recording', False):
     _ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    init_recorder(f"logs/recording_{_ts}")
+    init_recorder(f"bags/recording_{_ts}")
     atexit.register(lambda: get_recorder().stop() if get_recorder() else None)
-    print(f"Recording enabled: logs/recording_{_ts} (.jsonl + .mp4)")
+    print(f"Recording enabled: bags/recording_{_ts} (.jsonl + .mp4)")
 else:
     print("Recording disabled")
 
@@ -133,7 +156,6 @@ stage_remain_time = -1
 chances_flag = 1  # 双倍易伤触发标志位，需要从1递增，每小局比赛会重置，所以每局比赛要重启程序
 vulnerability = [-1, -1, -1, -1, -1, -1]  # 敌方易伤情况
 ally_vulnerability = [-1, -1, -1, -1, -1, -1]  # 己方特殊标识情况
-last_password_sent = ''  # 上次发送的密钥，避免重复发送
 base_hp = None
 base_hp_last = None
 base_hp_drop_time = None
@@ -596,6 +618,20 @@ def ser_send():
         'R2': 0,
         'R7': 0,
     }
+    # 密钥相关
+    password_config = config.get('password', {})
+    fixed_password = password_config.get('fixed_password', '')
+    verify_interval = password_config.get('verify_interval', 10)
+    last_password_time = 0  # 上次发送密钥时间
+    radio_password_verified = False  # 无线电密钥是否已验证
+
+    def send_password(pwd, cmd):
+        nonlocal seq
+        pwd_bytes = pwd.encode('ascii')[:6].ljust(6, b'0')
+        data = build_data_decision(chances_flag, state, password_cmd=cmd, password=pwd_bytes)
+        packet, seq = build_send_packet(data, seq, [0x03, 0x01])
+        ser1.write(packet)
+        print(f"发送密钥: {pwd}, cmd={cmd}")
 
     # 发送蓝方机器人坐标
     def send_point_B(send_name, data_source):
@@ -873,15 +909,21 @@ def ser_send():
             if trigger_reason:
                 try_send_double_vulnerability(trigger_reason)
 
-            # 如果获取到敌方密钥，自动发送验证密钥
-            if data_parse.enemy_password and data_parse.enemy_password != last_password_sent:
-                print(f"检测到敌方密钥: {data_parse.enemy_password}，发送验证请求")
-                data = build_data_decision(chances_flag, state, password_cmd=2,
-                                           password=data_parse.enemy_password.encode('ascii'))
-                packet, seq = build_send_packet(data, seq, [0x03, 0x01])
-                ser1.write(packet)
-                last_password_sent = data_parse.enemy_password
-                print(f"验证密钥请求已发送: {data_parse.enemy_password}")
+            # 密钥发送逻辑 (cmd=2 验证敌方密钥)
+            now = time.time()
+
+            if fixed_password:
+                # 固定密钥：周期性发送验证
+                if now - last_password_time >= verify_interval:
+                    send_password(fixed_password, 2)  # cmd=2 验证敌方密钥
+                    last_password_time = now
+                    print(f"周期验证固定密钥: {fixed_password}")
+            elif data_parse.enemy_password:
+                # 无线电敌方密钥：解析到了发送一次验证
+                if not radio_password_verified:
+                    send_password(data_parse.enemy_password, 2)  # cmd=2 验证敌方密钥
+                    radio_password_verified = True
+                    print(f"验证无线电密钥: {data_parse.enemy_password}")
             
             
 
@@ -985,6 +1027,7 @@ def ser_receive():
                     received_cmd_id2, received_data2, received_seq2 = vulnerability_result
                     received_data2 = list(received_data2)[0]
                     double_vulnerability_chance, opponent_double_vulnerability, encryption_level, key_modifiable = Radar_decision(received_data2)
+                    print(f"0x020E recv: raw=0x{received_data2:02X}, chances={double_vulnerability_chance}, opponent_dv={opponent_double_vulnerability}, enc={encryption_level}, key_mod={key_modifiable}")
                 if target_result is not None:
                     received_cmd_id3, received_data3, received_seq3 = target_result
                     # dart_info_t: byte0=dart_remaining_time, byte1-2=dart_info (uint16)
