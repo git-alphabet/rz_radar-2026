@@ -73,7 +73,7 @@ blocks:
   id: variable
   parameters:
     comment: Blue broadcast/info-wave center from table
-    value: 433.920e6
+    value: 433.2e6
   states:
     bus_sink: false
     bus_source: false
@@ -121,7 +121,7 @@ blocks:
   id: variable
   parameters:
     comment: Blue level-1 jamming center from table
-    value: 434.920e6
+    value: 432.2e6
   states:
     bus_sink: false
     bus_source: false
@@ -169,7 +169,7 @@ blocks:
   id: variable
   parameters:
     comment: Blue level-2 jamming center from table
-    value: 434.620e6
+    value: 432.50e6
   states:
     bus_sink: false
     bus_source: false
@@ -217,7 +217,7 @@ blocks:
   id: variable
   parameters:
     comment: Blue level-3 jamming center from table
-    value: 434.320e6
+    value: 432.80e6
   states:
     bus_sink: false
     bus_source: false
@@ -265,7 +265,7 @@ blocks:
   id: variable
   parameters:
     comment: Wideband LO center covering blue info + three jamming waves
-    value: 434.520e6
+    value: 432.925e6
   states:
     bus_sink: false
     bus_source: false
@@ -630,7 +630,7 @@ blocks:
     output_mode: '"bits"'
   states:
     _io_cache: ('Access Code Bit Frame Extractor', 'AccessCodeBitFrameExtractor',
-      [('access_code_hex', "'16E8D377151C712D'"), ('header_hex', "'000F000F'"), ('frame_bytes',
+      [('access_code_hex', "'2F6F4C74B914492E'"), ('header_hex', "'000F000F'"), ('frame_bytes',
       '27'), ('bit_order', "'msb'"), ('output_mode', "'bits'")], [('0', 'byte', 1)],
       [('0', 'byte', 1)], '', ['bit_order', 'frame_bytes', 'output_mode'])
     bus_sink: false
@@ -659,7 +659,7 @@ blocks:
     output_mode: '"bits"'
   states:
     _io_cache: ('Access Code Bit Frame Extractor', 'AccessCodeBitFrameExtractor',
-      [('access_code_hex', "'16E8D377151C712D'"), ('header_hex', "'000F000F'"), ('frame_bytes',
+      [('access_code_hex', "'2F6F4C74B914492E'"), ('header_hex', "'000F000F'"), ('frame_bytes',
       '27'), ('bit_order', "'msb'"), ('output_mode', "'bits'")], [('0', 'byte', 1)],
       [('0', 'byte', 1)], '', ['bit_order', 'frame_bytes', 'output_mode'])
     bus_sink: false
@@ -688,7 +688,7 @@ blocks:
     output_mode: '"bits"'
   states:
     _io_cache: ('Access Code Bit Frame Extractor', 'AccessCodeBitFrameExtractor',
-      [('access_code_hex', "'16E8D377151C712D'"), ('header_hex', "'000F000F'"), ('frame_bytes',
+      [('access_code_hex', "'2F6F4C74B914492E'"), ('header_hex', "'000F000F'"), ('frame_bytes',
       '27'), ('bit_order', "'msb'"), ('output_mode', "'bits'")], [('0', 'byte', 1)],
       [('0', 'byte', 1)], '', ['bit_order', 'frame_bytes', 'output_mode'])
     bus_sink: false
@@ -1322,4 +1322,3 @@ connections:
 
 metadata:
   file_format: 1
-  grc_version: 3.10.1
