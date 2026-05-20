@@ -12,7 +12,7 @@ ENABLE_STREAM=false
 for arg in "$@"; do
 	case "$arg" in
 		--stream)
-			ENABLE_STREAM=true
+			ENABLE_STREAM=false
 			;;
 		*)
 			;;
@@ -52,13 +52,23 @@ cleanup() {
 	container_id=$(docker compose -f docker/compose.dev.yml ps -q radar 2>/dev/null || true)
 	if [[ -n "$container_id" ]]; then
 		docker compose -f docker/compose.dev.yml exec -T radar bash -lc "pkill -2 -f 'python3 main.py' || true" >/dev/null 2>&1 || true
-		sleep 0.5
+		for i in $(seq 1 10); do
+			docker compose -f docker/compose.dev.yml exec -T radar bash -lc "pgrep -f 'python3 main.py' >/dev/null 2>&1" || break
+			sleep 1
+		done
 		docker compose -f docker/compose.dev.yml exec -T radar bash -lc "pkill -9 -f 'python3 main.py' || true" >/dev/null 2>&1 || true
 	fi
 	for pid in "$STREAM_PID" "$RADIO_PID"; do
 		if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
 			kill "$pid" 2>/dev/null || true
-			sleep 0.5
+		fi
+	done
+	for pid in "$STREAM_PID" "$RADIO_PID"; do
+		if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+			for i in $(seq 1 10); do
+				kill -0 "$pid" 2>/dev/null || break
+				sleep 1
+			done
 			kill -9 "$pid" 2>/dev/null || true
 		fi
 	done
@@ -69,7 +79,7 @@ cleanup() {
 
 trap cleanup EXIT INT TERM
 
-container_id=$(docker compose -f docker/compose.dev.yml ps -q radar)
+container_id=$(docker compose -f docker/compose.dev.yml ps -q radar 2>/dev/null || true)
 if [[ -z "$container_id" ]]; then
 	docker compose -f docker/compose.dev.yml up -d radar
 fi
