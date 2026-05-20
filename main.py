@@ -750,7 +750,9 @@ def ser_send():
                         idx = k[1:]
                         new_key = f"B{idx}" if state == 'R' else f"R{idx}"
                         if k in last_update_time and time.time() - last_update_time[k] < timeout:
-                            radio_data[new_key] = v
+                            x_cm, y_cm = v
+                            if 0 <= x_cm <= MAP_WIDTH_CM and 0 <= y_cm <= MAP_HEIGHT_CM:
+                                radio_data[new_key] = v
 
             # 遍历所有地面机器人，确定最终发送给裁判系统的物理坐标点
             for robot_name in ALL_GROUND_ROBOTS:
@@ -1247,7 +1249,9 @@ while True:
                 idx = k[1:]
                 new_key = f"B{idx}" if state == 'R' else f"R{idx}"
                 if k in last_update_time and time.time() - last_update_time[k] < timeout:
-                    radio_data[new_key] = v
+                    x_cm, y_cm = v
+                    if 0 <= x_cm <= MAP_WIDTH_CM and 0 <= y_cm <= MAP_HEIGHT_CM:
+                        radio_data[new_key] = v
 
     # 结合无线电数据并在本地 UI 画图显示
     combined_draw_data = all_filter_data.copy()
@@ -1311,6 +1315,8 @@ while True:
     cv2.imshow('information_ui', information_ui_show)
     map_show = cv2.resize(map, tuple(config['ui']['map_display_size']))
     cv2.imshow('map', map_show)
+    if _rec:
+        _rec.record_map_frame(map_show)
     img0 = cv2.resize(img0, tuple(config['ui']['img_display_size']))
     cv2.imshow('img', img0)
     if save_img:
