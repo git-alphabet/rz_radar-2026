@@ -1126,7 +1126,7 @@ else:
 # 环境不兼容，该部分单独一个进程启动 GNU Radio
 if config['global'].get('use_radio_gr', False):
     try:
-        gr_process = subprocess.Popen(["python3", "radio_py/radio.py"])
+        gr_process = subprocess.Popen(["python3", "radar_field_blue_linux/radio.py"])
         print("已启动 GNU Radio 接收进程")
     except Exception as e:
         print(f"启动 GNU Radio 失败: {e}")

@@ -6,31 +6,19 @@
 #
 # GNU Radio Python Flow Graph
 # Title: Blue radar four-wave receiver
-# GNU Radio version: 3.10.1.1
-
-from packaging.version import Version as StrictVersion
-
-if __name__ == '__main__':
-    import ctypes
-    import sys
-    if sys.platform.startswith('linux'):
-        try:
-            x11 = ctypes.cdll.LoadLibrary('libX11.so')
-            x11.XInitThreads()
-        except:
-            print("Warning: failed to XInitThreads()")
+# GNU Radio version: 3.10.12.0
 
 from PyQt5 import Qt
 from gnuradio import qtgui
-from gnuradio.filter import firdes
-import sip
 from gnuradio import blocks
 from gnuradio import digital
 from gnuradio import filter
+from gnuradio.filter import firdes
 from gnuradio import gr
 from gnuradio.fft import window
 import sys
 import signal
+from PyQt5 import Qt
 from argparse import ArgumentParser
 from gnuradio.eng_arg import eng_float, intx
 from gnuradio import eng_notation
@@ -40,10 +28,10 @@ import radio_epy_block_info as epy_block_info  # embedded python block
 import radio_epy_block_jam1 as epy_block_jam1  # embedded python block
 import radio_epy_block_jam2 as epy_block_jam2  # embedded python block
 import radio_epy_block_jam3 as epy_block_jam3  # embedded python block
+import sip
+import threading
 
 
-
-from gnuradio import qtgui
 
 class radio(gr.top_block, Qt.QWidget):
 
@@ -54,8 +42,8 @@ class radio(gr.top_block, Qt.QWidget):
         qtgui.util.check_set_qss()
         try:
             self.setWindowIcon(Qt.QIcon.fromTheme('gnuradio-grc'))
-        except:
-            pass
+        except BaseException as exc:
+            print(f"Qt GUI: Could not set Icon: {str(exc)}", file=sys.stderr)
         self.top_scroll_layout = Qt.QVBoxLayout()
         self.setLayout(self.top_scroll_layout)
         self.top_scroll = Qt.QScrollArea()
@@ -68,26 +56,26 @@ class radio(gr.top_block, Qt.QWidget):
         self.top_grid_layout = Qt.QGridLayout()
         self.top_layout.addLayout(self.top_grid_layout)
 
-        self.settings = Qt.QSettings("GNU Radio", "radio")
+        self.settings = Qt.QSettings("gnuradio/flowgraphs", "radio")
 
         try:
-            if StrictVersion(Qt.qVersion()) < StrictVersion("5.0.0"):
-                self.restoreGeometry(self.settings.value("geometry").toByteArray())
-            else:
-                self.restoreGeometry(self.settings.value("geometry"))
-        except:
-            pass
+            geometry = self.settings.value("geometry")
+            if geometry:
+                self.restoreGeometry(geometry)
+        except BaseException as exc:
+            print(f"Qt GUI: Could not restore geometry: {str(exc)}", file=sys.stderr)
+        self.flowgraph_started = threading.Event()
 
         ##################################################
         # Variables
         ##################################################
         self.xlate_decim = xlate_decim = 2
         self.samp_rate = samp_rate = 2e6
-        self.rx_center_freq = rx_center_freq = 432.925e6
-        self.jam3_freq = jam3_freq = 432.80e6
-        self.jam2_freq = jam2_freq = 432.50e6
-        self.jam1_freq = jam1_freq = 432.2e6
-        self.info_freq = info_freq = 433.2e6
+        self.rx_center_freq = rx_center_freq = 434.520e6
+        self.jam3_freq = jam3_freq = 434.320e6
+        self.jam2_freq = jam2_freq = 434.620e6
+        self.jam1_freq = jam1_freq = 434.920e6
+        self.info_freq = info_freq = 433.920e6
         self.rx_rf_bandwidth = rx_rf_bandwidth = 2.0e6
         self.rx_jam_gain = rx_jam_gain = 65
         self.rx_info_gain = rx_info_gain = 35
@@ -98,7 +86,9 @@ class radio(gr.top_block, Qt.QWidget):
         self.jam2_sensitivity = jam2_sensitivity = 2.5809
         self.jam2_offset = jam2_offset = jam2_freq - rx_center_freq
         self.jam2_cutoff = jam2_cutoff = 0.43e6
-        self.jam1_sensitivity = jam1_sensitivity = 2.8323
+        # Level-1 jamming nearly fills a 1 MS/s channel. Keep this branch at
+        # 2 MS/s and scale SPS/sensitivity accordingly to avoid edge distortion.
+        self.jam1_sensitivity = jam1_sensitivity = 1.41615
         self.jam1_offset = jam1_offset = jam1_freq - rx_center_freq
         self.jam1_cutoff = jam1_cutoff = 0.47e6
         self.info_sensitivity = info_sensitivity = 1.5756
@@ -110,6 +100,7 @@ class radio(gr.top_block, Qt.QWidget):
         ##################################################
         # Blocks
         ##################################################
+
         self.qtgui_time_sink_x_0_0_1 = qtgui.time_sink_c(
             1024, #size
             channel_samp_rate, #samp_rate
@@ -214,7 +205,7 @@ class radio(gr.top_block, Qt.QWidget):
         self.top_layout.addWidget(self._qtgui_time_sink_x_0_0_0_win)
         self.qtgui_time_sink_x_0_0 = qtgui.time_sink_c(
             1024, #size
-            channel_samp_rate, #samp_rate
+            samp_rate, #samp_rate
             "disturb1", #name
             1, #number of inputs
             None # parent
@@ -334,7 +325,7 @@ class radio(gr.top_block, Qt.QWidget):
         self.iio_fmcomms2_source_0.set_filter_params('Design', '', 0.90e6, 0.98e6)
         self.freq_xlating_fir_filter_jam3 = filter.freq_xlating_fir_filter_ccf(xlate_decim, firdes.low_pass(1, samp_rate, jam3_cutoff, channel_transition, window.WIN_HAMMING, 6.76), jam3_offset, samp_rate)
         self.freq_xlating_fir_filter_jam2 = filter.freq_xlating_fir_filter_ccf(xlate_decim, firdes.low_pass(1, samp_rate, jam2_cutoff, channel_transition, window.WIN_HAMMING, 6.76), jam2_offset, samp_rate)
-        self.freq_xlating_fir_filter_jam1 = filter.freq_xlating_fir_filter_ccf(xlate_decim, firdes.low_pass(1, samp_rate, jam1_cutoff, channel_transition, window.WIN_HAMMING, 6.76), jam1_offset, samp_rate)
+        self.freq_xlating_fir_filter_jam1 = filter.freq_xlating_fir_filter_ccf(1, firdes.low_pass(1, samp_rate, jam1_cutoff, channel_transition, window.WIN_HAMMING, 6.76), jam1_offset, samp_rate)
         self.freq_xlating_fir_filter_info = filter.freq_xlating_fir_filter_ccf(xlate_decim, firdes.low_pass(1, samp_rate, info_cutoff, channel_transition, window.WIN_HAMMING, 6.76), info_offset, samp_rate)
         self.epy_block_jam3 = epy_block_jam3.AccessCodeBitFrameExtractor(access_code_hex="16E8D377151C712D", header_hex="000F000F", frame_bytes=27, bit_order="msb", output_mode="bits")
         self.epy_block_jam2 = epy_block_jam2.AccessCodeBitFrameExtractor(access_code_hex="16E8D377151C712D", header_hex="000F000F", frame_bytes=27, bit_order="msb", output_mode="bits")
@@ -359,7 +350,7 @@ class radio(gr.top_block, Qt.QWidget):
             verbose=False,
             log=False)
         self.digital_gfsk_demod_jam1 = digital.gfsk_demod(
-            samples_per_symbol=52,
+            samples_per_symbol=104,
             sensitivity=jam1_sensitivity,
             gain_mu=0.175,
             mu=0.5,
@@ -420,7 +411,7 @@ class radio(gr.top_block, Qt.QWidget):
 
 
     def closeEvent(self, event):
-        self.settings = Qt.QSettings("GNU Radio", "radio")
+        self.settings = Qt.QSettings("gnuradio/flowgraphs", "radio")
         self.settings.setValue("geometry", self.saveGeometry())
         self.stop()
         self.wait()
@@ -496,6 +487,7 @@ class radio(gr.top_block, Qt.QWidget):
 
     def set_rx_jam_gain(self, rx_jam_gain):
         self.rx_jam_gain = rx_jam_gain
+        self.iio_fmcomms2_source_0.set_gain(1, self.rx_jam_gain)
 
     def get_rx_info_gain(self):
         return self.rx_info_gain
@@ -503,7 +495,6 @@ class radio(gr.top_block, Qt.QWidget):
     def set_rx_info_gain(self, rx_info_gain):
         self.rx_info_gain = rx_info_gain
         self.iio_fmcomms2_source_0.set_gain(0, self.rx_info_gain)
-        self.iio_fmcomms2_source_0.set_gain(1, self.rx_info_gain)
 
     def get_pluto_uri(self):
         return self.pluto_uri
@@ -607,7 +598,7 @@ class radio(gr.top_block, Qt.QWidget):
     def set_channel_samp_rate(self, channel_samp_rate):
         self.channel_samp_rate = channel_samp_rate
         self.qtgui_time_sink_x_0.set_samp_rate(self.channel_samp_rate)
-        self.qtgui_time_sink_x_0_0.set_samp_rate(self.channel_samp_rate)
+        self.qtgui_time_sink_x_0_0.set_samp_rate(self.samp_rate)
         self.qtgui_time_sink_x_0_0_0.set_samp_rate(self.channel_samp_rate)
         self.qtgui_time_sink_x_0_0_1.set_samp_rate(self.channel_samp_rate)
 
@@ -616,14 +607,12 @@ class radio(gr.top_block, Qt.QWidget):
 
 def main(top_block_cls=radio, options=None):
 
-    if StrictVersion("4.5.0") <= StrictVersion(Qt.qVersion()) < StrictVersion("5.0.0"):
-        style = gr.prefs().get_string('qtgui', 'style', 'raster')
-        Qt.QApplication.setGraphicsSystem(style)
     qapp = Qt.QApplication(sys.argv)
 
     tb = top_block_cls()
 
     tb.start()
+    tb.flowgraph_started.set()
 
     tb.show()
 

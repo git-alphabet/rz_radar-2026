@@ -73,7 +73,7 @@ blocks:
   id: variable
   parameters:
     comment: Blue broadcast/info-wave center from table
-    value: 433.2e6
+    value: 433.920e6
   states:
     bus_sink: false
     bus_source: false
@@ -121,7 +121,7 @@ blocks:
   id: variable
   parameters:
     comment: Blue level-1 jamming center from table
-    value: 432.2e6
+    value: 434.920e6
   states:
     bus_sink: false
     bus_source: false
@@ -144,8 +144,8 @@ blocks:
 - name: jam1_sensitivity
   id: variable
   parameters:
-    comment: Blue level-1 jamming sensitivity from table, rad/sample at 1 MS/s
-    value: '2.8323'
+    comment: Blue level-1 jamming sensitivity scaled for 2 MS/s / SPS 104 demod.
+    value: '1.41615'
   states:
     bus_sink: false
     bus_source: false
@@ -169,7 +169,7 @@ blocks:
   id: variable
   parameters:
     comment: Blue level-2 jamming center from table
-    value: 432.50e6
+    value: 434.620e6
   states:
     bus_sink: false
     bus_source: false
@@ -217,7 +217,7 @@ blocks:
   id: variable
   parameters:
     comment: Blue level-3 jamming center from table
-    value: 432.80e6
+    value: 434.320e6
   states:
     bus_sink: false
     bus_source: false
@@ -265,7 +265,7 @@ blocks:
   id: variable
   parameters:
     comment: Wideband LO center covering blue info + three jamming waves
-    value: 432.925e6
+    value: 434.520e6
   states:
     bus_sink: false
     bus_source: false
@@ -312,7 +312,7 @@ blocks:
 - name: samp_rate
   id: variable
   parameters:
-    comment: RF sample rate shared with the RX_BLUE_ganrao_3 replay transmitter
+    comment: RF sample rate for the wideband field receiver
     value: 2e6
   states:
     bus_sink: false
@@ -517,7 +517,7 @@ blocks:
   parameters:
     affinity: ''
     alias: ''
-    comment: 'Table parameters: Sample Rate 1M, SPS 52, BT 0.35.'
+    comment: 'Level-1 is kept at 2 MS/s to avoid 0.94 MHz channel edge distortion; SPS 104 equals table SPS 52 at 1 MS/s.'
     freq_error: '0.0'
     gain_mu: '0.175'
     log: 'False'
@@ -525,7 +525,7 @@ blocks:
     minoutbuf: '0'
     mu: '0.5'
     omega_relative_limit: '0.005'
-    samples_per_symbol: '52'
+    samples_per_symbol: '104'
     sensitivity: jam1_sensitivity
     verbose: 'False'
   states:
@@ -585,7 +585,7 @@ blocks:
   id: epy_block
   parameters:
     _source_code: "import os\nimport sys\n\n_module_file = globals().get(\n    \"\
-      __file__\",\n    r\"/home/alphabet/rz_radar-2026/radio_py/gr_air_frame_extractor.py\"\
+      __file__\",\n    os.path.join(os.getcwd(), \"radio_epy_block_0.py\")\
       ,\n)\n_module_dir = os.path.dirname(os.path.abspath(_module_file))\nif _module_dir\
       \ not in sys.path:\n    sys.path.insert(0, _module_dir)\n\nfrom gr_air_frame_extractor\
       \ import AccessCodeBitFrameExtractor\n"
@@ -601,8 +601,8 @@ blocks:
     output_mode: '"bits"'
   states:
     _io_cache: ('Access Code Bit Frame Extractor', 'AccessCodeBitFrameExtractor',
-      [('access_code_hex', "'2F6F4C74B914492E'"), ('header_hex', "'000F000F'"), ('frame_bytes',
-      '27'), ('bit_order', "'msb'"), ('output_mode', "'bits'")], [('0', 'byte', 1)],
+      [('access_code_hex', "'16E8D377151C712D'"), ('header_hex', "'000F000F'"), ('frame_bytes',
+      '27'), ('bit_order', "'lsb'"), ('output_mode', "'bits'")], [('0', 'byte', 1)],
       [('0', 'byte', 1)], '', ['bit_order', 'frame_bytes', 'output_mode'])
     bus_sink: false
     bus_source: false
@@ -614,7 +614,7 @@ blocks:
   id: epy_block
   parameters:
     _source_code: "import os\nimport sys\n\n_module_file = globals().get(\n    \"\
-      __file__\",\n    r\"/home/alphabet/rz_radar-2026/radio_py/gr_air_frame_extractor.py\"\
+      __file__\",\n    os.path.join(os.getcwd(), \"radio_epy_block_0.py\")\
       ,\n)\n_module_dir = os.path.dirname(os.path.abspath(_module_file))\nif _module_dir\
       \ not in sys.path:\n    sys.path.insert(0, _module_dir)\n\nfrom gr_air_frame_extractor\
       \ import AccessCodeBitFrameExtractor\n"
@@ -630,8 +630,8 @@ blocks:
     output_mode: '"bits"'
   states:
     _io_cache: ('Access Code Bit Frame Extractor', 'AccessCodeBitFrameExtractor',
-      [('access_code_hex', "'2F6F4C74B914492E'"), ('header_hex', "'000F000F'"), ('frame_bytes',
-      '27'), ('bit_order', "'msb'"), ('output_mode', "'bits'")], [('0', 'byte', 1)],
+      [('access_code_hex', "'16E8D377151C712D'"), ('header_hex', "'000F000F'"), ('frame_bytes',
+      '27'), ('bit_order', "'lsb'"), ('output_mode', "'bits'")], [('0', 'byte', 1)],
       [('0', 'byte', 1)], '', ['bit_order', 'frame_bytes', 'output_mode'])
     bus_sink: false
     bus_source: false
@@ -643,7 +643,7 @@ blocks:
   id: epy_block
   parameters:
     _source_code: "import os\nimport sys\n\n_module_file = globals().get(\n    \"\
-      __file__\",\n    r\"/home/alphabet/rz_radar-2026/radio_py/gr_air_frame_extractor.py\"\
+      __file__\",\n    os.path.join(os.getcwd(), \"radio_epy_block_0.py\")\
       ,\n)\n_module_dir = os.path.dirname(os.path.abspath(_module_file))\nif _module_dir\
       \ not in sys.path:\n    sys.path.insert(0, _module_dir)\n\nfrom gr_air_frame_extractor\
       \ import AccessCodeBitFrameExtractor\n"
@@ -659,8 +659,8 @@ blocks:
     output_mode: '"bits"'
   states:
     _io_cache: ('Access Code Bit Frame Extractor', 'AccessCodeBitFrameExtractor',
-      [('access_code_hex', "'2F6F4C74B914492E'"), ('header_hex', "'000F000F'"), ('frame_bytes',
-      '27'), ('bit_order', "'msb'"), ('output_mode', "'bits'")], [('0', 'byte', 1)],
+      [('access_code_hex', "'16E8D377151C712D'"), ('header_hex', "'000F000F'"), ('frame_bytes',
+      '27'), ('bit_order', "'lsb'"), ('output_mode', "'bits'")], [('0', 'byte', 1)],
       [('0', 'byte', 1)], '', ['bit_order', 'frame_bytes', 'output_mode'])
     bus_sink: false
     bus_source: false
@@ -672,7 +672,7 @@ blocks:
   id: epy_block
   parameters:
     _source_code: "import os\nimport sys\n\n_module_file = globals().get(\n    \"\
-      __file__\",\n    r\"/home/alphabet/rz_radar-2026/radio_py/gr_air_frame_extractor.py\"\
+      __file__\",\n    os.path.join(os.getcwd(), \"radio_epy_block_0.py\")\
       ,\n)\n_module_dir = os.path.dirname(os.path.abspath(_module_file))\nif _module_dir\
       \ not in sys.path:\n    sys.path.insert(0, _module_dir)\n\nfrom gr_air_frame_extractor\
       \ import AccessCodeBitFrameExtractor\n"
@@ -688,8 +688,8 @@ blocks:
     output_mode: '"bits"'
   states:
     _io_cache: ('Access Code Bit Frame Extractor', 'AccessCodeBitFrameExtractor',
-      [('access_code_hex', "'2F6F4C74B914492E'"), ('header_hex', "'000F000F'"), ('frame_bytes',
-      '27'), ('bit_order', "'msb'"), ('output_mode', "'bits'")], [('0', 'byte', 1)],
+      [('access_code_hex', "'16E8D377151C712D'"), ('header_hex', "'000F000F'"), ('frame_bytes',
+      '27'), ('bit_order', "'lsb'"), ('output_mode', "'bits'")], [('0', 'byte', 1)],
       [('0', 'byte', 1)], '', ['bit_order', 'frame_bytes', 'output_mode'])
     bus_sink: false
     bus_source: false
@@ -703,8 +703,7 @@ blocks:
     affinity: ''
     alias: ''
     center_freq: info_offset
-    comment: Translate this RF wave to 0 Hz and decimate 4 MS/s to 1 MS/s before GFSK
-      demod.
+    comment: Translate this RF wave to 0 Hz and decimate to 1 MS/s before GFSK demod.
     decim: xlate_decim
     maxoutbuf: '0'
     minoutbuf: '0'
@@ -725,9 +724,8 @@ blocks:
     affinity: ''
     alias: ''
     center_freq: jam1_offset
-    comment: Translate this RF wave to 0 Hz and decimate 4 MS/s to 1 MS/s before GFSK
-      demod.
-    decim: xlate_decim
+    comment: Translate this RF wave to 0 Hz but keep 2 MS/s; level-1 occupies 0.94 MHz and is too close to 1 MS/s Nyquist after decimation.
+    decim: '1'
     maxoutbuf: '0'
     minoutbuf: '0'
     samp_rate: samp_rate
@@ -1054,7 +1052,7 @@ blocks:
     name: '"disturb1"'
     nconnections: '1'
     size: '1024'
-    srate: channel_samp_rate
+    srate: samp_rate
     stemplot: 'False'
     style1: '1'
     style10: '1'
@@ -1322,3 +1320,4 @@ connections:
 
 metadata:
   file_format: 1
+  grc_version: 3.10.12.0

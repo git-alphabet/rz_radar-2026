@@ -8,8 +8,14 @@ CRC-valid referee frames on a chosen info/jam port.
 from __future__ import annotations
 
 import argparse
+import os
 import socket
+import sys
 import time
+
+PACKAGE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PACKAGE_ROOT not in sys.path:
+    sys.path.insert(0, PACKAGE_ROOT)
 
 from radar_protocol import (
     AirPayloadExtractor,
