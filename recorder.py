@@ -100,7 +100,7 @@ class AsyncRecorder:
         # Initialize video writer on first frame
         if self._video_writer is None:
             h, w = frame.shape[:2]
-            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+            fourcc = cv2.VideoWriter_fourcc(*"avc1")
             self._video_writer = cv2.VideoWriter(
                 self._video_path, fourcc, self._video_fps, (w, h)
             )
