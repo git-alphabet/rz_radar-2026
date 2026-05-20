@@ -9,6 +9,11 @@ place:
 - Recovered GNU Radio byte stream is MSB-first bytes after GFSK demod + repack
 """
 
+# File note:
+# Shared helper used by data_parse.py, field_parse.py, offline decoding, and
+# test-data generation. Keep constants, CRC checks, air-frame slicing, and
+# command parsing here.
+
 from __future__ import annotations
 
 import os
@@ -16,9 +21,6 @@ import struct
 from dataclasses import dataclass
 from typing import Iterable
 
-import sys
-import os
-sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from RM_serial_py.ser_api import Get_CRC8_Check_Sum, Get_CRC16_Check_Sum
 
 INFO_ACCESS_CODE = bytes.fromhex("2F6F4C74B914492E")

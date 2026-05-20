@@ -1,0 +1,1376 @@
+diff --git a/radio_py/data_parse.py b/radio_py/data_parse.py
+index 8a28ab1..3215fae 100644
+--- a/radio_py/data_parse.py
++++ b/radio_py/data_parse.py
+@@ -1,189 +1,240 @@
+ #!/usr/bin/env python3
+-"""
+-雷达无线链路接收解析脚本。
++# -*- coding: utf-8 -*-
++"""Parse one GNU Radio UDP output stream into radar protocol data.
+ 
+-输入为 GNU Radio UDP Sink 输出的连续恢复字节流：
+-GFSK Demod -> Repack Bits BB(MSB_FIRST) -> UDP Sink。
+-脚本按官方空口帧搜索 Access Code，剥离 4B Header，拼接 15B Payload，
+-再提取裁判系统串口帧并做 CRC8/CRC16 校验。
++Use this for one wave at a time: info defaults to port 55557, jam defaults to
++the level-3 port 55560. For field use across all jamming levels, use
++field_parse.py instead.
+ """
+ 
+ from __future__ import annotations
+ 
++import argparse
+ import socket
+-import threading
+ import time
+ 
+-from recorder import get_recorder
+-
+-from radio_py.radar_protocol import (
+-    AirPayloadExtractor,
+-    DecodedFrame,
+-    INFO_ACCESS_CODE,
+-    INFO_CMD_ORDER,
+-    JAM_ACCESS_CODE,
+-    SerialFrameExtractor,
+-    parse_serial_frame,
+-)
+-
+-# 全局变量存储最新位置数据
+-radio_positions: dict[str, tuple[float, float]] = {}
+-last_update_time = {}
+-# 全局变量存储敌方密钥
+-enemy_password = ''
+-enemy_password_time = 0
+-enemy_hp = {}
+-enemy_bullet = {}
+-enemy_boosts = {}
+-enemy_macro_state = None
+-# 共享状态写入锁
+-_radio_lock = threading.Lock()
+-robot_mapping: dict[str, str] = {
++try:
++    from radar_protocol import (
++        AirPayloadExtractor,
++        DecodedFrame,
++        INFO_ACCESS_CODE,
++        INFO_CMD_ORDER,
++        JAM_ACCESS_CODE,
++        SerialFrameExtractor,
++        parse_serial_frame,
++    )
++except ImportError:
++    from radio_py.radar_protocol import (
++        AirPayloadExtractor,
++        DecodedFrame,
++        INFO_ACCESS_CODE,
++        INFO_CMD_ORDER,
++        JAM_ACCESS_CODE,
++        SerialFrameExtractor,
++        parse_serial_frame,
++    )
++
++
++DEFAULT_HOST = "127.0.0.1"
++INFO_UDP_PORT = 55557
++JAM3_UDP_PORT = 55560
++
++enemy_password = ""
++enemy_password_time = 0.0
++enemy_hp: dict[str, int] = {}
++enemy_bullet: dict[str, int] = {}
++enemy_boosts: dict[str, object] = {}
++enemy_macro_state: int | None = None
++radio_positions: dict[str, tuple[int, int]] = {}
++last_update_time: dict[str, float] = {}
++
++ROBOT_MAPPING = {
+     "hero": "R1",
+     "engineer": "R2",
+     "infantry3": "R3",
+     "infantry4": "R4",
+     "aerial": "R5",
+-    "sentry": "R7"
+-}
+-CN_NAMES: dict[str, str] = {
+-    "hero": "英雄",
+-    "engineer": "工程",
+-    "infantry3": "步兵3",
+-    "infantry4": "步兵4",
+-    "aerial": "空中",
+-    "sentry": "哨兵",
+-    "reserved": "保留",
++    "sentry": "R7",
+ }
+ 
+ 
+ def format_decoded(frame: DecodedFrame) -> str:
+     cmd = frame.cmd_id
+     data = frame.data
+-    lines = [f"cmd=0x{cmd:04X}, seq={frame.seq}"]
+ 
+     if cmd == 0x0A01:
++        items = [
++            f"{name}=({value['x_cm']},{value['y_cm']})cm"
++            for name, value in data.items()
++        ]
++        return f"cmd=0x{cmd:04X} seq={frame.seq} positions " + " ".join(items)
++    if cmd == 0x0A02:
++        return f"cmd=0x{cmd:04X} seq={frame.seq} hp {data}"
++    if cmd == 0x0A03:
++        return f"cmd=0x{cmd:04X} seq={frame.seq} bullet {data}"
++    if cmd == 0x0A04:
++        return (
++            f"cmd=0x{cmd:04X} seq={frame.seq} gold={data['remaining_gold']} "
++            f"total={data['total_gold']} macro=0x{data['macro_state']:08X}"
++        )
++    if cmd == 0x0A05:
++        return f"cmd=0x{cmd:04X} seq={frame.seq} boosts {data}"
++    if cmd == 0x0A06:
++        return f"cmd=0x{cmd:04X} seq={frame.seq} password={data['password']}"
++    return f"cmd=0x{cmd:04X} seq={frame.seq} raw={data.get('raw')}"
++
++
++def parse_args() -> argparse.Namespace:
++    parser = argparse.ArgumentParser(
++        description="Parse recovered RoboMaster radar air frames from GNU Radio UDP."
++    )
++    parser.add_argument("--host", default=DEFAULT_HOST)
++    parser.add_argument(
++        "--port",
++        type=int,
++        default=None,
++        help="UDP port. Defaults to 55557 for info and 55560 for jam.",
++    )
++    parser.add_argument("--wave", choices=("info", "jam"), default="info")
++    parser.add_argument("--quiet", action="store_true")
++    parser.add_argument("--exit-after-pass", action="store_true")
++    parser.add_argument("--status-interval", type=float, default=2.0)
++    return parser.parse_args()
++
++
++def update_state(decoded: DecodedFrame) -> None:
++    global enemy_password, enemy_password_time, enemy_macro_state
++
++    now = time.time()
++    if decoded.cmd_id == 0x0A01:
+         for key in ("hero", "engineer", "infantry3", "infantry4", "aerial", "sentry"):
+-            value = data[key]
+-            lines.append(f"  {CN_NAMES[key]}位置: ({value['x_cm']}, {value['y_cm']}) cm")
+-    elif cmd == 0x0A02:
+-        for key in ("hero", "engineer", "infantry3", "infantry4", "reserved", "sentry"):
+-            lines.append(f"  {CN_NAMES[key]}血量: {data[key]}")
+-    elif cmd == 0x0A03:
+-        for key in ("hero", "infantry3", "infantry4", "aerial", "sentry"):
+-            lines.append(f"  {CN_NAMES[key]}允许发弹量: {data[key]}")
+-    elif cmd == 0x0A04:
+-        lines.append(f"  剩余金币: {data['remaining_gold']}")
+-        lines.append(f"  累计金币: {data['total_gold']}")
+-        lines.append(f"  宏观状态位: 0x{data['macro_state']:08X}")
+-    elif cmd == 0x0A05:
+-        for key in ("hero", "engineer", "infantry3", "infantry4", "sentry"):
+-            value = data[key]
+-            lines.append(
+-                f"  {CN_NAMES[key]}增益: 回血{value['hp_recover_percent']}%, "
+-                f"冷却{value['heat_cooling']}, 防御{value['defense_percent']}%, "
+-                f"负防御{value['negative_defense_percent']}%, 攻击{value['attack_percent']}%"
+-            )
+-        lines.append(f"  哨兵姿态: {data['sentry_posture']} (1进攻,2防御,3移动)")
+-    elif cmd == 0x0A06:
+-        lines.append(f"  干扰波密钥: {data['password']}")
+-    else:
+-        lines.append(f"  raw: {data['raw']}")
+-
+-    return "\n".join(lines)
+-
+-
+-def run_listener(host: str, port: int, wave: str, quiet: bool) -> None:
+-    global enemy_password
+-    global enemy_password_time
+-    global enemy_macro_state
+-    access_code = INFO_ACCESS_CODE if wave == "info" else JAM_ACCESS_CODE
+-    expected = set(INFO_CMD_ORDER) if wave == "info" else {0x0A06}
++            value = decoded.data[key]
++            robot = ROBOT_MAPPING[key]
++            radio_positions[robot] = (value["x_cm"], value["y_cm"])
++            last_update_time[robot] = now
++    elif decoded.cmd_id == 0x0A02:
++        enemy_hp.update(
++            {
++                "1": decoded.data["hero"],
++                "2": decoded.data["engineer"],
++                "3": decoded.data["infantry3"],
++                "4": decoded.data["infantry4"],
++                "7": decoded.data["sentry"],
++            }
++        )
++    elif decoded.cmd_id == 0x0A03:
++        enemy_bullet.update(
++            {
++                "1": decoded.data["hero"],
++                "3": decoded.data["infantry3"],
++                "4": decoded.data["infantry4"],
++                "6": decoded.data["aerial"],
++                "7": decoded.data["sentry"],
++            }
++        )
++    elif decoded.cmd_id == 0x0A04:
++        enemy_macro_state = decoded.data["macro_state"]
++    elif decoded.cmd_id == 0x0A05:
++        enemy_boosts.update(
++            {
++                "1": decoded.data["hero"],
++                "2": decoded.data["engineer"],
++                "3": decoded.data["infantry3"],
++                "4": decoded.data["infantry4"],
++                "7": decoded.data["sentry"],
++                "sentry_posture": decoded.data["sentry_posture"],
++            }
++        )
++    elif decoded.cmd_id == 0x0A06:
++        enemy_password = decoded.data["password"]
++        enemy_password_time = now
++
++
++def main() -> None:
++    args = parse_args()
++    port = args.port if args.port is not None else (
++        JAM3_UDP_PORT if args.wave == "jam" else INFO_UDP_PORT
++    )
++    access_code = INFO_ACCESS_CODE if args.wave == "info" else JAM_ACCESS_CODE
++    expected = set(INFO_CMD_ORDER) if args.wave == "info" else {0x0A06}
+ 
+     air = AirPayloadExtractor(access_code)
+     serial = SerialFrameExtractor()
+     seen: set[int] = set()
+     last_cycle_time: float | None = None
++    udp_packets = 0
++    air_payloads = 0
++    decoded_frames = 0
++    last_status = time.monotonic()
+ 
+     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+     sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024 * 1024)
+-    sock.bind((host, port))
++    sock.settimeout(0.5)
++    sock.bind((args.host, port))
++
++    print(
++        f"Listening UDP {args.host}:{port}, wave={args.wave}, "
++        f"access={access_code.hex().upper()}"
++    )
++    if args.wave == "jam":
++        print("Waiting for blue level-3 jam frames on port 55560.")
+ 
+-    print(f"监听 UDP {host}:{port}, wave={wave}, access={access_code.hex().upper()}")
+     try:
+         while True:
+-            chunk, _ = sock.recvfrom(4096)
+-            payloads = air.feed(chunk)
+-            for payload in payloads:
+-                frames = serial.feed(payload)
+-                for raw_frame in frames:
++            try:
++                chunk, _ = sock.recvfrom(4096)
++            except socket.timeout:
++                now = time.monotonic()
++                if args.status_interval > 0 and now - last_status >= args.status_interval:
++                    print(
++                        "status "
++                        f"udp_packets={udp_packets} air_payloads={air_payloads} "
++                        f"decoded_frames={decoded_frames}"
++                    )
++                    last_status = now
++                continue
++
++            udp_packets += 1
++            for payload in air.feed(chunk):
++                air_payloads += 1
++                for raw_frame in serial.feed(payload):
+                     decoded = parse_serial_frame(raw_frame)
++                    decoded_frames += 1
+                     seen.add(decoded.cmd_id)
+-                    if not quiet:
+-                        format_decoded(decoded)
+-                        #print(format_decoded(decoded))
+-
+-                    # 录制无线电接收数据
+-                    _rec = get_recorder()
+-                    if _rec:
+-                        _rec.record("radio_rx", {
+-                            "cmd": f"0x{decoded.cmd_id:04X}",
+-                            "seq": decoded.seq,
+-                            "data": decoded.data,
+-                        })
+-
+-                    # 解析敌方位置数据并存储
+-                    with _radio_lock:
+-                        if decoded.cmd_id == 0x0A01:
+-                            for key in ("hero", "engineer", "infantry3", "infantry4", "aerial", "sentry"):
+-                                value = decoded.data[key]
+-                                robot = robot_mapping[key]
+-                                radio_positions[robot] = (value['x_cm'], value['y_cm'])
+-                                last_update_time[robot] = time.time()
+-
+-                        if decoded.cmd_id == 0x0A02:
+-                            enemy_hp["1"] = decoded.data["hero"]
+-                            enemy_hp["2"] = decoded.data["engineer"]
+-                            enemy_hp["3"] = decoded.data["infantry3"]
+-                            enemy_hp["4"] = decoded.data["infantry4"]
+-                            enemy_hp["7"] = decoded.data["sentry"]
+-
+-                        if decoded.cmd_id == 0x0A03:
+-                            enemy_bullet["1"] = decoded.data["hero"]
+-                            enemy_bullet["3"] = decoded.data["infantry3"]
+-                            enemy_bullet["4"] = decoded.data["infantry4"]
+-                            enemy_bullet["6"] = decoded.data["aerial"]
+-                            enemy_bullet["7"] = decoded.data["sentry"]
+-
+-                        if decoded.cmd_id == 0x0A05:
+-                            enemy_boosts["1"] = decoded.data["hero"]
+-                            enemy_boosts["2"] = decoded.data["engineer"]
+-                            enemy_boosts["3"] = decoded.data["infantry3"]
+-                            enemy_boosts["4"] = decoded.data["infantry4"]
+-                            enemy_boosts["7"] = decoded.data["sentry"]
+-                            enemy_boosts["sentry_posture"] = decoded.data["sentry_posture"]
+-
+-                        if decoded.cmd_id == 0x0A04:
+-                            enemy_macro_state = decoded.data["macro_state"]
+-
+-                        # 解析敌方密钥并存储
+-                        if decoded.cmd_id == 0x0A06:
+-                            enemy_password = decoded.data['password']
+-                            enemy_password_time = time.time()
+-                            print(f"获取敌方密钥: {enemy_password}")
+-
+-                    if expected.issubset(seen):
++                    update_state(decoded)
++
++                    if not args.quiet:
++                        print(format_decoded(decoded))
++
++                    if args.wave == "jam" and decoded.cmd_id == 0x0A06:
++                        print(
++                            "PARSE_OK 解析通过: "
++                            f"blue jam3 cmd=0x0A06 password={decoded.data['password']}"
++                        )
++                        if args.exit_after_pass:
++                            return
++
++                    if args.wave == "info" and expected.issubset(seen):
+                         now = time.monotonic()
+-                        if last_cycle_time is not None:
++                        if last_cycle_time is None:
++                            print("PARSE_OK 解析通过: first complete info cycle")
++                        else:
+                             interval = now - last_cycle_time
+                             freq = 1.0 / interval if interval > 0 else 0.0
+-                            print(f"完整周期: interval={interval * 1000:.1f} ms, freq={freq:.2f} Hz")
+-                        else:
+-                            print("第一个完整周期")
++                            print(
++                                "PARSE_OK 解析通过: "
++                                f"complete info cycle interval={interval * 1000:.1f}ms "
++                                f"freq={freq:.2f}Hz"
++                            )
+                         last_cycle_time = now
+                         seen.clear()
++                        if args.exit_after_pass:
++                            return
+     except KeyboardInterrupt:
+-        print("\n接收结束。")
++        print("\nStopped.")
+     finally:
+         sock.close()
+ 
++
++if __name__ == "__main__":
++    main()
+diff --git a/radio_py/data_stream.py b/radio_py/data_stream.py
+index 5f0b67b..4f23ae3 100644
+--- a/radio_py/data_stream.py
++++ b/radio_py/data_stream.py
+@@ -7,6 +7,10 @@ Access Code 8B + Header 4B + Payload 15B = 27B。
+ GNU Radio 发射链应为 UDP Source(byte) -> GFSK Mod(do_unpack=True) -> PlutoSink。
+ """
+ 
++# File note:
++# Generates simulated official radar air frames and sends them to a GNU Radio
++# UDP Source. Useful for TX-chain/parser tests; not needed for passive reception.
++
+ from __future__ import annotations
+ 
+ import argparse
+diff --git a/radio_py/gr_air_frame_extractor.py b/radio_py/gr_air_frame_extractor.py
+index 0356015..cc1d7a2 100644
+--- a/radio_py/gr_air_frame_extractor.py
++++ b/radio_py/gr_air_frame_extractor.py
+@@ -1,3 +1,10 @@
++"""GNU Radio embedded block for recovering complete official air frames.
++
++radio.py imports this after GFSK demodulation and access-code tagging. It checks
++Access Code/Header alignment and outputs one 27-byte packet as either 216 bits
++or 27 packed bytes.
++"""
++
+ import numpy as np
+ from gnuradio import gr
+ import pmt
+diff --git a/radio_py/radar_protocol.py b/radio_py/radar_protocol.py
+index e47bf47..cc133b9 100644
+--- a/radio_py/radar_protocol.py
++++ b/radio_py/radar_protocol.py
+@@ -9,6 +9,11 @@ place:
+ - Recovered GNU Radio byte stream is MSB-first bytes after GFSK demod + repack
+ """
+ 
++# File note:
++# Shared helper used by data_parse.py, field_parse.py, offline decoding, and
++# test-data generation. Keep constants, CRC checks, air-frame slicing, and
++# command parsing here.
++
+ from __future__ import annotations
+ 
+ import os
+@@ -16,9 +21,6 @@ import struct
+ from dataclasses import dataclass
+ from typing import Iterable
+ 
+-import sys
+-import os
+-sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+ from RM_serial_py.ser_api import Get_CRC8_Check_Sum, Get_CRC16_Check_Sum
+ 
+ INFO_ACCESS_CODE = bytes.fromhex("2F6F4C74B914492E")
+diff --git a/radio_py/radio.grc b/radio_py/radio.grc
+index f00618a..dfc41f8 100644
+--- a/radio_py/radio.grc
++++ b/radio_py/radio.grc
+@@ -37,7 +37,7 @@ blocks:
+   id: variable
+   parameters:
+     comment: Per-wave sample rate after Frequency Xlating FIR decimation
+-    value: 1e6
++    value: samp_rate / xlate_decim
+   states:
+     bus_sink: false
+     bus_source: false
+@@ -205,7 +205,7 @@ blocks:
+   id: variable
+   parameters:
+     comment: Blue level-3 jamming bandwidth 0.25 MHz / 2
+-    value: 0.125e6
++    value: 0.18e6
+   states:
+     bus_sink: false
+     bus_source: false
+@@ -288,8 +288,8 @@ blocks:
+ - name: rx_jam_gain
+   id: variable
+   parameters:
+-    comment: RX2/manual gain for strong jamming waves; keep low to avoid overload
+-    value: '50'
++    comment: RX2/manual gain for weak over-air replay of jamming waves; lower if overloaded
++    value: '65'
+   states:
+     bus_sink: false
+     bus_source: false
+@@ -312,9 +312,8 @@ blocks:
+ - name: samp_rate
+   id: variable
+   parameters:
+-    comment: RF sample rate; four channels are digitally translated and decimated
+-      to 1 MS/s
+-    value: 4e6
++    comment: RF sample rate shared with the RX_BLUE_ganrao_3 replay transmitter
++    value: 2e6
+   states:
+     bus_sink: false
+     bus_source: false
+@@ -325,8 +324,8 @@ blocks:
+ - name: xlate_decim
+   id: variable
+   parameters:
+-    comment: 4 MS/s / 4 = 1 MS/s per GFSK demod chain
+-    value: '4'
++    comment: 2 MS/s / 2 = 1 MS/s per GFSK demod chain
++    value: '2'
+   states:
+     bus_sink: false
+     bus_source: false
+@@ -586,7 +585,7 @@ blocks:
+   id: epy_block
+   parameters:
+     _source_code: "import os\nimport sys\n\n_module_file = globals().get(\n    \"\
+-      __file__\",\n    r\"/home/alphabet/rz_radar-2026/radio_py/gr_air_frame_extractor.py\"\
++      __file__\",\n    r\"C:\\Users\\GMD777\\Desktop\\rz_radar_2026\\radio_py\\radio_epy_block_0.py\"\
+       ,\n)\n_module_dir = os.path.dirname(os.path.abspath(_module_file))\nif _module_dir\
+       \ not in sys.path:\n    sys.path.insert(0, _module_dir)\n\nfrom gr_air_frame_extractor\
+       \ import AccessCodeBitFrameExtractor\n"
+@@ -602,8 +601,8 @@ blocks:
+     output_mode: '"bits"'
+   states:
+     _io_cache: ('Access Code Bit Frame Extractor', 'AccessCodeBitFrameExtractor',
+-      [('access_code_hex', "'2F6F4C74B914492E'"), ('header_hex', "'000F000F'"), ('frame_bytes',
+-      '27'), ('bit_order', "'msb'"), ('output_mode', "'bits'")], [('0', 'byte', 1)],
++      [('access_code_hex', "'16E8D377151C712D'"), ('header_hex', "'000F000F'"), ('frame_bytes',
++      '27'), ('bit_order', "'lsb'"), ('output_mode', "'bits'")], [('0', 'byte', 1)],
+       [('0', 'byte', 1)], '', ['bit_order', 'frame_bytes', 'output_mode'])
+     bus_sink: false
+     bus_source: false
+@@ -615,7 +614,7 @@ blocks:
+   id: epy_block
+   parameters:
+     _source_code: "import os\nimport sys\n\n_module_file = globals().get(\n    \"\
+-      __file__\",\n    r\"/home/alphabet/rz_radar-2026/radio_py/gr_air_frame_extractor.py\"\
++      __file__\",\n    r\"C:\\Users\\GMD777\\Desktop\\rz_radar_2026\\radio_py\\radio_epy_block_0.py\"\
+       ,\n)\n_module_dir = os.path.dirname(os.path.abspath(_module_file))\nif _module_dir\
+       \ not in sys.path:\n    sys.path.insert(0, _module_dir)\n\nfrom gr_air_frame_extractor\
+       \ import AccessCodeBitFrameExtractor\n"
+@@ -632,7 +631,7 @@ blocks:
+   states:
+     _io_cache: ('Access Code Bit Frame Extractor', 'AccessCodeBitFrameExtractor',
+       [('access_code_hex', "'16E8D377151C712D'"), ('header_hex', "'000F000F'"), ('frame_bytes',
+-      '27'), ('bit_order', "'msb'"), ('output_mode', "'bits'")], [('0', 'byte', 1)],
++      '27'), ('bit_order', "'lsb'"), ('output_mode', "'bits'")], [('0', 'byte', 1)],
+       [('0', 'byte', 1)], '', ['bit_order', 'frame_bytes', 'output_mode'])
+     bus_sink: false
+     bus_source: false
+@@ -644,7 +643,7 @@ blocks:
+   id: epy_block
+   parameters:
+     _source_code: "import os\nimport sys\n\n_module_file = globals().get(\n    \"\
+-      __file__\",\n    r\"/home/alphabet/rz_radar-2026/radio_py/gr_air_frame_extractor.py\"\
++      __file__\",\n    r\"C:\\Users\\GMD777\\Desktop\\rz_radar_2026\\radio_py\\radio_epy_block_0.py\"\
+       ,\n)\n_module_dir = os.path.dirname(os.path.abspath(_module_file))\nif _module_dir\
+       \ not in sys.path:\n    sys.path.insert(0, _module_dir)\n\nfrom gr_air_frame_extractor\
+       \ import AccessCodeBitFrameExtractor\n"
+@@ -661,7 +660,7 @@ blocks:
+   states:
+     _io_cache: ('Access Code Bit Frame Extractor', 'AccessCodeBitFrameExtractor',
+       [('access_code_hex', "'16E8D377151C712D'"), ('header_hex', "'000F000F'"), ('frame_bytes',
+-      '27'), ('bit_order', "'msb'"), ('output_mode', "'bits'")], [('0', 'byte', 1)],
++      '27'), ('bit_order', "'lsb'"), ('output_mode', "'bits'")], [('0', 'byte', 1)],
+       [('0', 'byte', 1)], '', ['bit_order', 'frame_bytes', 'output_mode'])
+     bus_sink: false
+     bus_source: false
+@@ -673,7 +672,7 @@ blocks:
+   id: epy_block
+   parameters:
+     _source_code: "import os\nimport sys\n\n_module_file = globals().get(\n    \"\
+-      __file__\",\n    r\"/home/alphabet/rz_radar-2026/radio_py/gr_air_frame_extractor.py\"\
++      __file__\",\n    r\"C:\\Users\\GMD777\\Desktop\\rz_radar_2026\\radio_py\\radio_epy_block_0.py\"\
+       ,\n)\n_module_dir = os.path.dirname(os.path.abspath(_module_file))\nif _module_dir\
+       \ not in sys.path:\n    sys.path.insert(0, _module_dir)\n\nfrom gr_air_frame_extractor\
+       \ import AccessCodeBitFrameExtractor\n"
+@@ -690,7 +689,7 @@ blocks:
+   states:
+     _io_cache: ('Access Code Bit Frame Extractor', 'AccessCodeBitFrameExtractor',
+       [('access_code_hex', "'16E8D377151C712D'"), ('header_hex', "'000F000F'"), ('frame_bytes',
+-      '27'), ('bit_order', "'msb'"), ('output_mode', "'bits'")], [('0', 'byte', 1)],
++      '27'), ('bit_order', "'lsb'"), ('output_mode', "'bits'")], [('0', 'byte', 1)],
+       [('0', 'byte', 1)], '', ['bit_order', 'frame_bytes', 'output_mode'])
+     bus_sink: false
+     bus_source: false
+@@ -797,9 +796,9 @@ blocks:
+     comment: RX1 is for weak info wave, RX2 is for strong jamming waves.
+     filter: ''
+     filter_source: '''Design'''
+-    fpass: 0.95e6
++    fpass: 0.90e6
+     frequency: int(rx_center_freq)
+-    fstop: 1.10e6
++    fstop: 0.98e6
+     gain1: '''manual'''
+     gain2: '''manual'''
+     len_tag_key: packet_len
+@@ -955,10 +954,10 @@ blocks:
+     marker7: '-1'
+     marker8: '-1'
+     marker9: '-1'
+-    name: '""'
++    name: '"information"'
+     nconnections: '1'
+     size: '1024'
+-    srate: samp_rate
++    srate: channel_samp_rate
+     stemplot: 'False'
+     style1: '1'
+     style10: '1'
+@@ -999,6 +998,297 @@ blocks:
+     coordinate: [592, 448.0]
+     rotation: 0
+     state: enabled
++- name: qtgui_time_sink_x_0_0
++  id: qtgui_time_sink_x
++  parameters:
++    affinity: ''
++    alias: ''
++    alpha1: '1.0'
++    alpha10: '1.0'
++    alpha2: '1.0'
++    alpha3: '1.0'
++    alpha4: '1.0'
++    alpha5: '1.0'
++    alpha6: '1.0'
++    alpha7: '1.0'
++    alpha8: '1.0'
++    alpha9: '1.0'
++    autoscale: 'False'
++    axislabels: 'True'
++    color1: blue
++    color10: dark blue
++    color2: red
++    color3: green
++    color4: black
++    color5: cyan
++    color6: magenta
++    color7: yellow
++    color8: dark red
++    color9: dark green
++    comment: ''
++    ctrlpanel: 'False'
++    entags: 'True'
++    grid: 'False'
++    gui_hint: ''
++    label1: Signal 1
++    label10: Signal 10
++    label2: Signal 2
++    label3: Signal 3
++    label4: Signal 4
++    label5: Signal 5
++    label6: Signal 6
++    label7: Signal 7
++    label8: Signal 8
++    label9: Signal 9
++    legend: 'True'
++    marker1: '-1'
++    marker10: '-1'
++    marker2: '-1'
++    marker3: '-1'
++    marker4: '-1'
++    marker5: '-1'
++    marker6: '-1'
++    marker7: '-1'
++    marker8: '-1'
++    marker9: '-1'
++    name: '"disturb1"'
++    nconnections: '1'
++    size: '1024'
++    srate: channel_samp_rate
++    stemplot: 'False'
++    style1: '1'
++    style10: '1'
++    style2: '1'
++    style3: '1'
++    style4: '1'
++    style5: '1'
++    style6: '1'
++    style7: '1'
++    style8: '1'
++    style9: '1'
++    tr_chan: '0'
++    tr_delay: '0'
++    tr_level: '0.0'
++    tr_mode: qtgui.TRIG_MODE_FREE
++    tr_slope: qtgui.TRIG_SLOPE_POS
++    tr_tag: '""'
++    type: complex
++    update_time: '0.10'
++    width1: '1'
++    width10: '1'
++    width2: '1'
++    width3: '1'
++    width4: '1'
++    width5: '1'
++    width6: '1'
++    width7: '1'
++    width8: '1'
++    width9: '1'
++    ylabel: Amplitude
++    ymax: '1'
++    ymin: '-1'
++    yunit: '""'
++  states:
++    bus_sink: false
++    bus_source: false
++    bus_structure: null
++    coordinate: [584, 656.0]
++    rotation: 0
++    state: enabled
++- name: qtgui_time_sink_x_0_0_0
++  id: qtgui_time_sink_x
++  parameters:
++    affinity: ''
++    alias: ''
++    alpha1: '1.0'
++    alpha10: '1.0'
++    alpha2: '1.0'
++    alpha3: '1.0'
++    alpha4: '1.0'
++    alpha5: '1.0'
++    alpha6: '1.0'
++    alpha7: '1.0'
++    alpha8: '1.0'
++    alpha9: '1.0'
++    autoscale: 'False'
++    axislabels: 'True'
++    color1: blue
++    color10: dark blue
++    color2: red
++    color3: green
++    color4: black
++    color5: cyan
++    color6: magenta
++    color7: yellow
++    color8: dark red
++    color9: dark green
++    comment: ''
++    ctrlpanel: 'False'
++    entags: 'True'
++    grid: 'False'
++    gui_hint: ''
++    label1: Signal 1
++    label10: Signal 10
++    label2: Signal 2
++    label3: Signal 3
++    label4: Signal 4
++    label5: Signal 5
++    label6: Signal 6
++    label7: Signal 7
++    label8: Signal 8
++    label9: Signal 9
++    legend: 'True'
++    marker1: '-1'
++    marker10: '-1'
++    marker2: '-1'
++    marker3: '-1'
++    marker4: '-1'
++    marker5: '-1'
++    marker6: '-1'
++    marker7: '-1'
++    marker8: '-1'
++    marker9: '-1'
++    name: '"disturb2"'
++    nconnections: '1'
++    size: '1024'
++    srate: channel_samp_rate
++    stemplot: 'False'
++    style1: '1'
++    style10: '1'
++    style2: '1'
++    style3: '1'
++    style4: '1'
++    style5: '1'
++    style6: '1'
++    style7: '1'
++    style8: '1'
++    style9: '1'
++    tr_chan: '0'
++    tr_delay: '0'
++    tr_level: '0.0'
++    tr_mode: qtgui.TRIG_MODE_FREE
++    tr_slope: qtgui.TRIG_SLOPE_POS
++    tr_tag: '""'
++    type: complex
++    update_time: '0.10'
++    width1: '1'
++    width10: '1'
++    width2: '1'
++    width3: '1'
++    width4: '1'
++    width5: '1'
++    width6: '1'
++    width7: '1'
++    width8: '1'
++    width9: '1'
++    ylabel: Amplitude
++    ymax: '1'
++    ymin: '-1'
++    yunit: '""'
++  states:
++    bus_sink: false
++    bus_source: false
++    bus_structure: null
++    coordinate: [584, 1008.0]
++    rotation: 0
++    state: enabled
++- name: qtgui_time_sink_x_0_0_1
++  id: qtgui_time_sink_x
++  parameters:
++    affinity: ''
++    alias: ''
++    alpha1: '1.0'
++    alpha10: '1.0'
++    alpha2: '1.0'
++    alpha3: '1.0'
++    alpha4: '1.0'
++    alpha5: '1.0'
++    alpha6: '1.0'
++    alpha7: '1.0'
++    alpha8: '1.0'
++    alpha9: '1.0'
++    autoscale: 'False'
++    axislabels: 'True'
++    color1: blue
++    color10: dark blue
++    color2: red
++    color3: green
++    color4: black
++    color5: cyan
++    color6: magenta
++    color7: yellow
++    color8: dark red
++    color9: dark green
++    comment: ''
++    ctrlpanel: 'False'
++    entags: 'True'
++    grid: 'False'
++    gui_hint: ''
++    label1: Signal 1
++    label10: Signal 10
++    label2: Signal 2
++    label3: Signal 3
++    label4: Signal 4
++    label5: Signal 5
++    label6: Signal 6
++    label7: Signal 7
++    label8: Signal 8
++    label9: Signal 9
++    legend: 'True'
++    marker1: '-1'
++    marker10: '-1'
++    marker2: '-1'
++    marker3: '-1'
++    marker4: '-1'
++    marker5: '-1'
++    marker6: '-1'
++    marker7: '-1'
++    marker8: '-1'
++    marker9: '-1'
++    name: '"disturb3"'
++    nconnections: '1'
++    size: '1024'
++    srate: channel_samp_rate
++    stemplot: 'False'
++    style1: '1'
++    style10: '1'
++    style2: '1'
++    style3: '1'
++    style4: '1'
++    style5: '1'
++    style6: '1'
++    style7: '1'
++    style8: '1'
++    style9: '1'
++    tr_chan: '0'
++    tr_delay: '0'
++    tr_level: '0.0'
++    tr_mode: qtgui.TRIG_MODE_FREE
++    tr_slope: qtgui.TRIG_SLOPE_POS
++    tr_tag: '""'
++    type: complex
++    update_time: '0.10'
++    width1: '1'
++    width10: '1'
++    width2: '1'
++    width3: '1'
++    width4: '1'
++    width5: '1'
++    width6: '1'
++    width7: '1'
++    width8: '1'
++    width9: '1'
++    ylabel: Amplitude
++    ymax: '1'
++    ymin: '-1'
++    yunit: '""'
++  states:
++    bus_sink: false
++    bus_source: false
++    bus_structure: null
++    coordinate: [600, 1192.0]
++    rotation: 0
++    state: enabled
+ 
+ connections:
+ - [blocks_repack_bits_bb_info, '0', network_udp_sink_info, '0']
+@@ -1020,8 +1310,11 @@ connections:
+ - [freq_xlating_fir_filter_info, '0', digital_gfsk_demod_info, '0']
+ - [freq_xlating_fir_filter_info, '0', qtgui_time_sink_x_0, '0']
+ - [freq_xlating_fir_filter_jam1, '0', digital_gfsk_demod_jam1, '0']
++- [freq_xlating_fir_filter_jam1, '0', qtgui_time_sink_x_0_0, '0']
+ - [freq_xlating_fir_filter_jam2, '0', digital_gfsk_demod_jam2, '0']
++- [freq_xlating_fir_filter_jam2, '0', qtgui_time_sink_x_0_0_0, '0']
+ - [freq_xlating_fir_filter_jam3, '0', digital_gfsk_demod_jam3, '0']
++- [freq_xlating_fir_filter_jam3, '0', qtgui_time_sink_x_0_0_1, '0']
+ - [iio_fmcomms2_source_0, '0', freq_xlating_fir_filter_info, '0']
+ - [iio_fmcomms2_source_0, '1', freq_xlating_fir_filter_jam1, '0']
+ - [iio_fmcomms2_source_0, '1', freq_xlating_fir_filter_jam2, '0']
+diff --git a/radio_py/radio.py b/radio_py/radio.py
+old mode 100755
+new mode 100644
+index e874ff1..b037267
+--- a/radio_py/radio.py
++++ b/radio_py/radio.py
+@@ -6,32 +6,19 @@
+ #
+ # GNU Radio Python Flow Graph
+ # Title: Blue radar four-wave receiver
+-# GNU Radio version: 3.10.1.1
+-
+-from packaging.version import Version as StrictVersion
+-import os
+-
+-if __name__ == '__main__':
+-    import ctypes
+-    import sys
+-    if sys.platform.startswith('linux'):
+-        try:
+-            x11 = ctypes.cdll.LoadLibrary('libX11.so')
+-            x11.XInitThreads()
+-        except:
+-            print("Warning: failed to XInitThreads()")
++# GNU Radio version: 3.10.12.0
+ 
+ from PyQt5 import Qt
+ from gnuradio import qtgui
+-from gnuradio.filter import firdes
+-import sip
+ from gnuradio import blocks
+ from gnuradio import digital
+ from gnuradio import filter
++from gnuradio.filter import firdes
+ from gnuradio import gr
+ from gnuradio.fft import window
+ import sys
+ import signal
++from PyQt5 import Qt
+ from argparse import ArgumentParser
+ from gnuradio.eng_arg import eng_float, intx
+ from gnuradio import eng_notation
+@@ -41,11 +28,11 @@ import radio_epy_block_info as epy_block_info  # embedded python block
+ import radio_epy_block_jam1 as epy_block_jam1  # embedded python block
+ import radio_epy_block_jam2 as epy_block_jam2  # embedded python block
+ import radio_epy_block_jam3 as epy_block_jam3  # embedded python block
++import sip
++import threading
+ 
+ 
+ 
+-from gnuradio import qtgui
+-
+ class radio(gr.top_block, Qt.QWidget):
+ 
+     def __init__(self):
+@@ -55,8 +42,8 @@ class radio(gr.top_block, Qt.QWidget):
+         qtgui.util.check_set_qss()
+         try:
+             self.setWindowIcon(Qt.QIcon.fromTheme('gnuradio-grc'))
+-        except:
+-            pass
++        except BaseException as exc:
++            print(f"Qt GUI: Could not set Icon: {str(exc)}", file=sys.stderr)
+         self.top_scroll_layout = Qt.QVBoxLayout()
+         self.setLayout(self.top_scroll_layout)
+         self.top_scroll = Qt.QScrollArea()
+@@ -69,33 +56,33 @@ class radio(gr.top_block, Qt.QWidget):
+         self.top_grid_layout = Qt.QGridLayout()
+         self.top_layout.addLayout(self.top_grid_layout)
+ 
+-        self.settings = Qt.QSettings("GNU Radio", "radio")
++        self.settings = Qt.QSettings("gnuradio/flowgraphs", "radio")
+ 
+         try:
+-            if StrictVersion(Qt.qVersion()) < StrictVersion("5.0.0"):
+-                self.restoreGeometry(self.settings.value("geometry").toByteArray())
+-            else:
+-                self.restoreGeometry(self.settings.value("geometry"))
+-        except:
+-            pass
++            geometry = self.settings.value("geometry")
++            if geometry:
++                self.restoreGeometry(geometry)
++        except BaseException as exc:
++            print(f"Qt GUI: Could not restore geometry: {str(exc)}", file=sys.stderr)
++        self.flowgraph_started = threading.Event()
+ 
+         ##################################################
+         # Variables
+         ##################################################
++        self.xlate_decim = xlate_decim = 2
++        self.samp_rate = samp_rate = 2e6
+         self.rx_center_freq = rx_center_freq = 434.520e6
+         self.jam3_freq = jam3_freq = 434.320e6
+         self.jam2_freq = jam2_freq = 434.620e6
+         self.jam1_freq = jam1_freq = 434.920e6
+         self.info_freq = info_freq = 433.920e6
+-        self.xlate_decim = xlate_decim = 4
+-        self.samp_rate = samp_rate = 4e6
+         self.rx_rf_bandwidth = rx_rf_bandwidth = 2.0e6
+-        self.rx_jam_gain = rx_jam_gain = 50
++        self.rx_jam_gain = rx_jam_gain = 65
+         self.rx_info_gain = rx_info_gain = 35
+         self.pluto_uri = pluto_uri = "ip:192.168.1.10"
+         self.jam3_sensitivity = jam3_sensitivity = 0.6646
+         self.jam3_offset = jam3_offset = jam3_freq - rx_center_freq
+-        self.jam3_cutoff = jam3_cutoff = 0.125e6
++        self.jam3_cutoff = jam3_cutoff = 0.18e6
+         self.jam2_sensitivity = jam2_sensitivity = 2.5809
+         self.jam2_offset = jam2_offset = jam2_freq - rx_center_freq
+         self.jam2_cutoff = jam2_cutoff = 0.43e6
+@@ -106,15 +93,169 @@ class radio(gr.top_block, Qt.QWidget):
+         self.info_offset = info_offset = info_freq - rx_center_freq
+         self.info_cutoff = info_cutoff = 0.27e6
+         self.channel_transition = channel_transition = 20e3
+-        self.channel_samp_rate = channel_samp_rate = 1e6
++        self.channel_samp_rate = channel_samp_rate = samp_rate / xlate_decim
+ 
+         ##################################################
+         # Blocks
+         ##################################################
++
++        self.qtgui_time_sink_x_0_0_1 = qtgui.time_sink_c(
++            1024, #size
++            channel_samp_rate, #samp_rate
++            "disturb3", #name
++            1, #number of inputs
++            None # parent
++        )
++        self.qtgui_time_sink_x_0_0_1.set_update_time(0.10)
++        self.qtgui_time_sink_x_0_0_1.set_y_axis(-1, 1)
++
++        self.qtgui_time_sink_x_0_0_1.set_y_label('Amplitude', "")
++
++        self.qtgui_time_sink_x_0_0_1.enable_tags(True)
++        self.qtgui_time_sink_x_0_0_1.set_trigger_mode(qtgui.TRIG_MODE_FREE, qtgui.TRIG_SLOPE_POS, 0.0, 0, 0, "")
++        self.qtgui_time_sink_x_0_0_1.enable_autoscale(False)
++        self.qtgui_time_sink_x_0_0_1.enable_grid(False)
++        self.qtgui_time_sink_x_0_0_1.enable_axis_labels(True)
++        self.qtgui_time_sink_x_0_0_1.enable_control_panel(False)
++        self.qtgui_time_sink_x_0_0_1.enable_stem_plot(False)
++
++
++        labels = ['Signal 1', 'Signal 2', 'Signal 3', 'Signal 4', 'Signal 5',
++            'Signal 6', 'Signal 7', 'Signal 8', 'Signal 9', 'Signal 10']
++        widths = [1, 1, 1, 1, 1,
++            1, 1, 1, 1, 1]
++        colors = ['blue', 'red', 'green', 'black', 'cyan',
++            'magenta', 'yellow', 'dark red', 'dark green', 'dark blue']
++        alphas = [1.0, 1.0, 1.0, 1.0, 1.0,
++            1.0, 1.0, 1.0, 1.0, 1.0]
++        styles = [1, 1, 1, 1, 1,
++            1, 1, 1, 1, 1]
++        markers = [-1, -1, -1, -1, -1,
++            -1, -1, -1, -1, -1]
++
++
++        for i in range(2):
++            if len(labels[i]) == 0:
++                if (i % 2 == 0):
++                    self.qtgui_time_sink_x_0_0_1.set_line_label(i, "Re{{Data {0}}}".format(i/2))
++                else:
++                    self.qtgui_time_sink_x_0_0_1.set_line_label(i, "Im{{Data {0}}}".format(i/2))
++            else:
++                self.qtgui_time_sink_x_0_0_1.set_line_label(i, labels[i])
++            self.qtgui_time_sink_x_0_0_1.set_line_width(i, widths[i])
++            self.qtgui_time_sink_x_0_0_1.set_line_color(i, colors[i])
++            self.qtgui_time_sink_x_0_0_1.set_line_style(i, styles[i])
++            self.qtgui_time_sink_x_0_0_1.set_line_marker(i, markers[i])
++            self.qtgui_time_sink_x_0_0_1.set_line_alpha(i, alphas[i])
++
++        self._qtgui_time_sink_x_0_0_1_win = sip.wrapinstance(self.qtgui_time_sink_x_0_0_1.qwidget(), Qt.QWidget)
++        self.top_layout.addWidget(self._qtgui_time_sink_x_0_0_1_win)
++        self.qtgui_time_sink_x_0_0_0 = qtgui.time_sink_c(
++            1024, #size
++            channel_samp_rate, #samp_rate
++            "disturb2", #name
++            1, #number of inputs
++            None # parent
++        )
++        self.qtgui_time_sink_x_0_0_0.set_update_time(0.10)
++        self.qtgui_time_sink_x_0_0_0.set_y_axis(-1, 1)
++
++        self.qtgui_time_sink_x_0_0_0.set_y_label('Amplitude', "")
++
++        self.qtgui_time_sink_x_0_0_0.enable_tags(True)
++        self.qtgui_time_sink_x_0_0_0.set_trigger_mode(qtgui.TRIG_MODE_FREE, qtgui.TRIG_SLOPE_POS, 0.0, 0, 0, "")
++        self.qtgui_time_sink_x_0_0_0.enable_autoscale(False)
++        self.qtgui_time_sink_x_0_0_0.enable_grid(False)
++        self.qtgui_time_sink_x_0_0_0.enable_axis_labels(True)
++        self.qtgui_time_sink_x_0_0_0.enable_control_panel(False)
++        self.qtgui_time_sink_x_0_0_0.enable_stem_plot(False)
++
++
++        labels = ['Signal 1', 'Signal 2', 'Signal 3', 'Signal 4', 'Signal 5',
++            'Signal 6', 'Signal 7', 'Signal 8', 'Signal 9', 'Signal 10']
++        widths = [1, 1, 1, 1, 1,
++            1, 1, 1, 1, 1]
++        colors = ['blue', 'red', 'green', 'black', 'cyan',
++            'magenta', 'yellow', 'dark red', 'dark green', 'dark blue']
++        alphas = [1.0, 1.0, 1.0, 1.0, 1.0,
++            1.0, 1.0, 1.0, 1.0, 1.0]
++        styles = [1, 1, 1, 1, 1,
++            1, 1, 1, 1, 1]
++        markers = [-1, -1, -1, -1, -1,
++            -1, -1, -1, -1, -1]
++
++
++        for i in range(2):
++            if len(labels[i]) == 0:
++                if (i % 2 == 0):
++                    self.qtgui_time_sink_x_0_0_0.set_line_label(i, "Re{{Data {0}}}".format(i/2))
++                else:
++                    self.qtgui_time_sink_x_0_0_0.set_line_label(i, "Im{{Data {0}}}".format(i/2))
++            else:
++                self.qtgui_time_sink_x_0_0_0.set_line_label(i, labels[i])
++            self.qtgui_time_sink_x_0_0_0.set_line_width(i, widths[i])
++            self.qtgui_time_sink_x_0_0_0.set_line_color(i, colors[i])
++            self.qtgui_time_sink_x_0_0_0.set_line_style(i, styles[i])
++            self.qtgui_time_sink_x_0_0_0.set_line_marker(i, markers[i])
++            self.qtgui_time_sink_x_0_0_0.set_line_alpha(i, alphas[i])
++
++        self._qtgui_time_sink_x_0_0_0_win = sip.wrapinstance(self.qtgui_time_sink_x_0_0_0.qwidget(), Qt.QWidget)
++        self.top_layout.addWidget(self._qtgui_time_sink_x_0_0_0_win)
++        self.qtgui_time_sink_x_0_0 = qtgui.time_sink_c(
++            1024, #size
++            channel_samp_rate, #samp_rate
++            "disturb1", #name
++            1, #number of inputs
++            None # parent
++        )
++        self.qtgui_time_sink_x_0_0.set_update_time(0.10)
++        self.qtgui_time_sink_x_0_0.set_y_axis(-1, 1)
++
++        self.qtgui_time_sink_x_0_0.set_y_label('Amplitude', "")
++
++        self.qtgui_time_sink_x_0_0.enable_tags(True)
++        self.qtgui_time_sink_x_0_0.set_trigger_mode(qtgui.TRIG_MODE_FREE, qtgui.TRIG_SLOPE_POS, 0.0, 0, 0, "")
++        self.qtgui_time_sink_x_0_0.enable_autoscale(False)
++        self.qtgui_time_sink_x_0_0.enable_grid(False)
++        self.qtgui_time_sink_x_0_0.enable_axis_labels(True)
++        self.qtgui_time_sink_x_0_0.enable_control_panel(False)
++        self.qtgui_time_sink_x_0_0.enable_stem_plot(False)
++
++
++        labels = ['Signal 1', 'Signal 2', 'Signal 3', 'Signal 4', 'Signal 5',
++            'Signal 6', 'Signal 7', 'Signal 8', 'Signal 9', 'Signal 10']
++        widths = [1, 1, 1, 1, 1,
++            1, 1, 1, 1, 1]
++        colors = ['blue', 'red', 'green', 'black', 'cyan',
++            'magenta', 'yellow', 'dark red', 'dark green', 'dark blue']
++        alphas = [1.0, 1.0, 1.0, 1.0, 1.0,
++            1.0, 1.0, 1.0, 1.0, 1.0]
++        styles = [1, 1, 1, 1, 1,
++            1, 1, 1, 1, 1]
++        markers = [-1, -1, -1, -1, -1,
++            -1, -1, -1, -1, -1]
++
++
++        for i in range(2):
++            if len(labels[i]) == 0:
++                if (i % 2 == 0):
++                    self.qtgui_time_sink_x_0_0.set_line_label(i, "Re{{Data {0}}}".format(i/2))
++                else:
++                    self.qtgui_time_sink_x_0_0.set_line_label(i, "Im{{Data {0}}}".format(i/2))
++            else:
++                self.qtgui_time_sink_x_0_0.set_line_label(i, labels[i])
++            self.qtgui_time_sink_x_0_0.set_line_width(i, widths[i])
++            self.qtgui_time_sink_x_0_0.set_line_color(i, colors[i])
++            self.qtgui_time_sink_x_0_0.set_line_style(i, styles[i])
++            self.qtgui_time_sink_x_0_0.set_line_marker(i, markers[i])
++            self.qtgui_time_sink_x_0_0.set_line_alpha(i, alphas[i])
++
++        self._qtgui_time_sink_x_0_0_win = sip.wrapinstance(self.qtgui_time_sink_x_0_0.qwidget(), Qt.QWidget)
++        self.top_layout.addWidget(self._qtgui_time_sink_x_0_0_win)
+         self.qtgui_time_sink_x_0 = qtgui.time_sink_c(
+             1024, #size
+-            samp_rate, #samp_rate
+-            "", #name
++            channel_samp_rate, #samp_rate
++            "information", #name
+             1, #number of inputs
+             None # parent
+         )
+@@ -179,7 +320,7 @@ class radio(gr.top_block, Qt.QWidget):
+         self.iio_fmcomms2_source_0.set_quadrature(True)
+         self.iio_fmcomms2_source_0.set_rfdc(False)
+         self.iio_fmcomms2_source_0.set_bbdc(True)
+-        self.iio_fmcomms2_source_0.set_filter_params('Design', '', 0.95e6, 1.10e6)
++        self.iio_fmcomms2_source_0.set_filter_params('Design', '', 0.90e6, 0.98e6)
+         self.freq_xlating_fir_filter_jam3 = filter.freq_xlating_fir_filter_ccf(xlate_decim, firdes.low_pass(1, samp_rate, jam3_cutoff, channel_transition, window.WIN_HAMMING, 6.76), jam3_offset, samp_rate)
+         self.freq_xlating_fir_filter_jam2 = filter.freq_xlating_fir_filter_ccf(xlate_decim, firdes.low_pass(1, samp_rate, jam2_cutoff, channel_transition, window.WIN_HAMMING, 6.76), jam2_offset, samp_rate)
+         self.freq_xlating_fir_filter_jam1 = filter.freq_xlating_fir_filter_ccf(xlate_decim, firdes.low_pass(1, samp_rate, jam1_cutoff, channel_transition, window.WIN_HAMMING, 6.76), jam1_offset, samp_rate)
+@@ -256,38 +397,44 @@ class radio(gr.top_block, Qt.QWidget):
+         self.connect((self.freq_xlating_fir_filter_info, 0), (self.digital_gfsk_demod_info, 0))
+         self.connect((self.freq_xlating_fir_filter_info, 0), (self.qtgui_time_sink_x_0, 0))
+         self.connect((self.freq_xlating_fir_filter_jam1, 0), (self.digital_gfsk_demod_jam1, 0))
++        self.connect((self.freq_xlating_fir_filter_jam1, 0), (self.qtgui_time_sink_x_0_0, 0))
+         self.connect((self.freq_xlating_fir_filter_jam2, 0), (self.digital_gfsk_demod_jam2, 0))
++        self.connect((self.freq_xlating_fir_filter_jam2, 0), (self.qtgui_time_sink_x_0_0_0, 0))
+         self.connect((self.freq_xlating_fir_filter_jam3, 0), (self.digital_gfsk_demod_jam3, 0))
++        self.connect((self.freq_xlating_fir_filter_jam3, 0), (self.qtgui_time_sink_x_0_0_1, 0))
+         self.connect((self.iio_fmcomms2_source_0, 0), (self.freq_xlating_fir_filter_info, 0))
+         self.connect((self.iio_fmcomms2_source_0, 1), (self.freq_xlating_fir_filter_jam1, 0))
+         self.connect((self.iio_fmcomms2_source_0, 1), (self.freq_xlating_fir_filter_jam2, 0))
+         self.connect((self.iio_fmcomms2_source_0, 1), (self.freq_xlating_fir_filter_jam3, 0))
+ 
+ 
+-
+-        # IQ raw recording (set RECORD_IQ=1 to enable)
+-        if os.environ.get("RECORD_IQ", "0") == "1":
+-            import datetime
+-            iq_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "bags")
+-            os.makedirs(iq_dir, exist_ok=True)
+-            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+-            iq_path = os.path.join(iq_dir, f"iq_raw_{ts}.cf32")
+-            self.iq_file_sink = blocks.file_sink(gr.sizeof_gr_complex, iq_path, False)
+-            self.iq_file_sink.set_unbuffered(False)
+-            self.connect((self.iio_fmcomms2_source_0, 0), (self.iq_file_sink, 0))
+-            self.iq_file_sink_1 = blocks.file_sink(gr.sizeof_gr_complex, iq_path.replace('.cf32', '_1.cf32'), False)
+-            self.iq_file_sink_1.set_unbuffered(False)
+-            self.connect((self.iio_fmcomms2_source_0, 1), (self.iq_file_sink_1, 0))
+-            print(f"IQ recording: {iq_path} AND ..._1.cf32 (complex64, {int(self.samp_rate/1e3)}kHz)")
+-
+     def closeEvent(self, event):
+-        self.settings = Qt.QSettings("GNU Radio", "radio")
++        self.settings = Qt.QSettings("gnuradio/flowgraphs", "radio")
+         self.settings.setValue("geometry", self.saveGeometry())
+         self.stop()
+         self.wait()
+ 
+         event.accept()
+ 
++    def get_xlate_decim(self):
++        return self.xlate_decim
++
++    def set_xlate_decim(self, xlate_decim):
++        self.xlate_decim = xlate_decim
++        self.set_channel_samp_rate(self.samp_rate / self.xlate_decim)
++
++    def get_samp_rate(self):
++        return self.samp_rate
++
++    def set_samp_rate(self, samp_rate):
++        self.samp_rate = samp_rate
++        self.set_channel_samp_rate(self.samp_rate / self.xlate_decim)
++        self.freq_xlating_fir_filter_info.set_taps(firdes.low_pass(1, self.samp_rate, self.info_cutoff, self.channel_transition, window.WIN_HAMMING, 6.76))
++        self.freq_xlating_fir_filter_jam1.set_taps(firdes.low_pass(1, self.samp_rate, self.jam1_cutoff, self.channel_transition, window.WIN_HAMMING, 6.76))
++        self.freq_xlating_fir_filter_jam2.set_taps(firdes.low_pass(1, self.samp_rate, self.jam2_cutoff, self.channel_transition, window.WIN_HAMMING, 6.76))
++        self.freq_xlating_fir_filter_jam3.set_taps(firdes.low_pass(1, self.samp_rate, self.jam3_cutoff, self.channel_transition, window.WIN_HAMMING, 6.76))
++        self.iio_fmcomms2_source_0.set_samplerate(int(self.samp_rate))
++
+     def get_rx_center_freq(self):
+         return self.rx_center_freq
+ 
+@@ -327,24 +474,6 @@ class radio(gr.top_block, Qt.QWidget):
+         self.info_freq = info_freq
+         self.set_info_offset(self.info_freq - self.rx_center_freq)
+ 
+-    def get_xlate_decim(self):
+-        return self.xlate_decim
+-
+-    def set_xlate_decim(self, xlate_decim):
+-        self.xlate_decim = xlate_decim
+-
+-    def get_samp_rate(self):
+-        return self.samp_rate
+-
+-    def set_samp_rate(self, samp_rate):
+-        self.samp_rate = samp_rate
+-        self.freq_xlating_fir_filter_info.set_taps(firdes.low_pass(1, self.samp_rate, self.info_cutoff, self.channel_transition, window.WIN_HAMMING, 6.76))
+-        self.freq_xlating_fir_filter_jam1.set_taps(firdes.low_pass(1, self.samp_rate, self.jam1_cutoff, self.channel_transition, window.WIN_HAMMING, 6.76))
+-        self.freq_xlating_fir_filter_jam2.set_taps(firdes.low_pass(1, self.samp_rate, self.jam2_cutoff, self.channel_transition, window.WIN_HAMMING, 6.76))
+-        self.freq_xlating_fir_filter_jam3.set_taps(firdes.low_pass(1, self.samp_rate, self.jam3_cutoff, self.channel_transition, window.WIN_HAMMING, 6.76))
+-        self.iio_fmcomms2_source_0.set_samplerate(int(self.samp_rate))
+-        self.qtgui_time_sink_x_0.set_samp_rate(self.samp_rate)
+-
+     def get_rx_rf_bandwidth(self):
+         return self.rx_rf_bandwidth
+ 
+@@ -466,20 +595,29 @@ class radio(gr.top_block, Qt.QWidget):
+ 
+     def set_channel_samp_rate(self, channel_samp_rate):
+         self.channel_samp_rate = channel_samp_rate
++        self.qtgui_time_sink_x_0.set_samp_rate(self.channel_samp_rate)
++        self.qtgui_time_sink_x_0_0.set_samp_rate(self.channel_samp_rate)
++        self.qtgui_time_sink_x_0_0_0.set_samp_rate(self.channel_samp_rate)
++        self.qtgui_time_sink_x_0_0_1.set_samp_rate(self.channel_samp_rate)
+ 
+ 
+ 
+ 
+ def main(top_block_cls=radio, options=None):
+ 
+-    if StrictVersion("4.5.0") <= StrictVersion(Qt.qVersion()) < StrictVersion("5.0.0"):
+-        style = gr.prefs().get_string('qtgui', 'style', 'raster')
+-        Qt.QApplication.setGraphicsSystem(style)
+     qapp = Qt.QApplication(sys.argv)
+ 
+     tb = top_block_cls()
+ 
+     tb.start()
++    tb.flowgraph_started.set()
++    print(
++        "RX running: "
++        f"center={tb.rx_center_freq/1e6:.3f}MHz samp_rate={tb.samp_rate/1e6:.3f}MS/s "
++        f"channel_rate={tb.channel_samp_rate/1e6:.3f}MS/s "
++        f"RX1=info RX2=jam jam3={tb.jam3_freq/1e6:.3f}MHz "
++        f"jam_udp=55560 jam_gain={tb.rx_jam_gain}"
++    )
+ 
+     tb.show()
+ 
+diff --git a/radio_py/radio_epy_block_info.py b/radio_py/radio_epy_block_info.py
+index d17d9be..2b6b145 100644
+--- a/radio_py/radio_epy_block_info.py
++++ b/radio_py/radio_epy_block_info.py
+@@ -3,7 +3,7 @@ import sys
+ 
+ _module_file = globals().get(
+     "__file__",
+-    r"/home/alphabet/rz_radar-2026/radio_py/gr_air_frame_extractor.py",
++    r"C:\Users\GMD777\Desktop\rz_radar_2026\radio_py\radio_epy_block_0.py",
+ )
+ _module_dir = os.path.dirname(os.path.abspath(_module_file))
+ if _module_dir not in sys.path:
+diff --git a/radio_py/radio_epy_block_jam1.py b/radio_py/radio_epy_block_jam1.py
+index d17d9be..2b6b145 100644
+--- a/radio_py/radio_epy_block_jam1.py
++++ b/radio_py/radio_epy_block_jam1.py
+@@ -3,7 +3,7 @@ import sys
+ 
+ _module_file = globals().get(
+     "__file__",
+-    r"/home/alphabet/rz_radar-2026/radio_py/gr_air_frame_extractor.py",
++    r"C:\Users\GMD777\Desktop\rz_radar_2026\radio_py\radio_epy_block_0.py",
+ )
+ _module_dir = os.path.dirname(os.path.abspath(_module_file))
+ if _module_dir not in sys.path:
+diff --git a/radio_py/radio_epy_block_jam2.py b/radio_py/radio_epy_block_jam2.py
+index d17d9be..2b6b145 100644
+--- a/radio_py/radio_epy_block_jam2.py
++++ b/radio_py/radio_epy_block_jam2.py
+@@ -3,7 +3,7 @@ import sys
+ 
+ _module_file = globals().get(
+     "__file__",
+-    r"/home/alphabet/rz_radar-2026/radio_py/gr_air_frame_extractor.py",
++    r"C:\Users\GMD777\Desktop\rz_radar_2026\radio_py\radio_epy_block_0.py",
+ )
+ _module_dir = os.path.dirname(os.path.abspath(_module_file))
+ if _module_dir not in sys.path:
+diff --git a/radio_py/radio_epy_block_jam3.py b/radio_py/radio_epy_block_jam3.py
+index d17d9be..2b6b145 100644
+--- a/radio_py/radio_epy_block_jam3.py
++++ b/radio_py/radio_epy_block_jam3.py
+@@ -3,7 +3,7 @@ import sys
+ 
+ _module_file = globals().get(
+     "__file__",
+-    r"/home/alphabet/rz_radar-2026/radio_py/gr_air_frame_extractor.py",
++    r"C:\Users\GMD777\Desktop\rz_radar_2026\radio_py\radio_epy_block_0.py",
+ )
+ _module_dir = os.path.dirname(os.path.abspath(_module_file))
+ if _module_dir not in sys.path:

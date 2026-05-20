@@ -7,6 +7,10 @@ Access Code 8B + Header 4B + Payload 15B = 27B。
 GNU Radio 发射链应为 UDP Source(byte) -> GFSK Mod(do_unpack=True) -> PlutoSink。
 """
 
+# File note:
+# Generates simulated official radar air frames and sends them to a GNU Radio
+# UDP Source. Useful for TX-chain/parser tests; not needed for passive reception.
+
 from __future__ import annotations
 
 import argparse

@@ -8,26 +8,12 @@
 # Title: Blue radar four-wave receiver
 # GNU Radio version: 3.10.1.1
 
-from packaging.version import Version as StrictVersion
-import os
-
-if __name__ == '__main__':
-    import ctypes
-    import sys
-    if sys.platform.startswith('linux'):
-        try:
-            x11 = ctypes.cdll.LoadLibrary('libX11.so')
-            x11.XInitThreads()
-        except:
-            print("Warning: failed to XInitThreads()")
-
 from PyQt5 import Qt
 from gnuradio import qtgui
-from gnuradio.filter import firdes
-import sip
 from gnuradio import blocks
 from gnuradio import digital
 from gnuradio import filter
+from gnuradio.filter import firdes
 from gnuradio import gr
 from gnuradio.fft import window
 import sys
@@ -41,10 +27,10 @@ import radio_epy_block_info as epy_block_info  # embedded python block
 import radio_epy_block_jam1 as epy_block_jam1  # embedded python block
 import radio_epy_block_jam2 as epy_block_jam2  # embedded python block
 import radio_epy_block_jam3 as epy_block_jam3  # embedded python block
+import sip
+import threading
 
 
-
-from gnuradio import qtgui
 
 class radio(gr.top_block, Qt.QWidget):
 
@@ -55,8 +41,8 @@ class radio(gr.top_block, Qt.QWidget):
         qtgui.util.check_set_qss()
         try:
             self.setWindowIcon(Qt.QIcon.fromTheme('gnuradio-grc'))
-        except:
-            pass
+        except BaseException as exc:
+            print(f"Qt GUI: Could not set Icon: {str(exc)}", file=sys.stderr)
         self.top_scroll_layout = Qt.QVBoxLayout()
         self.setLayout(self.top_scroll_layout)
         self.top_scroll = Qt.QScrollArea()
@@ -69,33 +55,33 @@ class radio(gr.top_block, Qt.QWidget):
         self.top_grid_layout = Qt.QGridLayout()
         self.top_layout.addLayout(self.top_grid_layout)
 
-        self.settings = Qt.QSettings("GNU Radio", "radio")
+        self.settings = Qt.QSettings("gnuradio/flowgraphs", "radio")
 
         try:
-            if StrictVersion(Qt.qVersion()) < StrictVersion("5.0.0"):
-                self.restoreGeometry(self.settings.value("geometry").toByteArray())
-            else:
-                self.restoreGeometry(self.settings.value("geometry"))
-        except:
-            pass
+            geometry = self.settings.value("geometry")
+            if geometry:
+                self.restoreGeometry(geometry)
+        except BaseException as exc:
+            print(f"Qt GUI: Could not restore geometry: {str(exc)}", file=sys.stderr)
+        self.flowgraph_started = threading.Event()
 
         ##################################################
         # Variables
         ##################################################
+        self.xlate_decim = xlate_decim = 2
+        self.samp_rate = samp_rate = 2e6
         self.rx_center_freq = rx_center_freq = 434.520e6
         self.jam3_freq = jam3_freq = 434.320e6
         self.jam2_freq = jam2_freq = 434.620e6
         self.jam1_freq = jam1_freq = 434.920e6
         self.info_freq = info_freq = 433.920e6
-        self.xlate_decim = xlate_decim = 4
-        self.samp_rate = samp_rate = 4e6
         self.rx_rf_bandwidth = rx_rf_bandwidth = 2.0e6
-        self.rx_jam_gain = rx_jam_gain = 50
+        self.rx_jam_gain = rx_jam_gain = 65
         self.rx_info_gain = rx_info_gain = 35
         self.pluto_uri = pluto_uri = "ip:192.168.1.10"
         self.jam3_sensitivity = jam3_sensitivity = 0.6646
         self.jam3_offset = jam3_offset = jam3_freq - rx_center_freq
-        self.jam3_cutoff = jam3_cutoff = 0.125e6
+        self.jam3_cutoff = jam3_cutoff = 0.18e6
         self.jam2_sensitivity = jam2_sensitivity = 2.5809
         self.jam2_offset = jam2_offset = jam2_freq - rx_center_freq
         self.jam2_cutoff = jam2_cutoff = 0.43e6
@@ -106,15 +92,169 @@ class radio(gr.top_block, Qt.QWidget):
         self.info_offset = info_offset = info_freq - rx_center_freq
         self.info_cutoff = info_cutoff = 0.27e6
         self.channel_transition = channel_transition = 20e3
-        self.channel_samp_rate = channel_samp_rate = 1e6
+        self.channel_samp_rate = channel_samp_rate = samp_rate / xlate_decim
 
         ##################################################
         # Blocks
         ##################################################
+
+        self.qtgui_time_sink_x_0_0_1 = qtgui.time_sink_c(
+            1024, #size
+            channel_samp_rate, #samp_rate
+            "disturb3", #name
+            1, #number of inputs
+            None # parent
+        )
+        self.qtgui_time_sink_x_0_0_1.set_update_time(0.10)
+        self.qtgui_time_sink_x_0_0_1.set_y_axis(-1, 1)
+
+        self.qtgui_time_sink_x_0_0_1.set_y_label('Amplitude', "")
+
+        self.qtgui_time_sink_x_0_0_1.enable_tags(True)
+        self.qtgui_time_sink_x_0_0_1.set_trigger_mode(qtgui.TRIG_MODE_FREE, qtgui.TRIG_SLOPE_POS, 0.0, 0, 0, "")
+        self.qtgui_time_sink_x_0_0_1.enable_autoscale(False)
+        self.qtgui_time_sink_x_0_0_1.enable_grid(False)
+        self.qtgui_time_sink_x_0_0_1.enable_axis_labels(True)
+        self.qtgui_time_sink_x_0_0_1.enable_control_panel(False)
+        self.qtgui_time_sink_x_0_0_1.enable_stem_plot(False)
+
+
+        labels = ['Signal 1', 'Signal 2', 'Signal 3', 'Signal 4', 'Signal 5',
+            'Signal 6', 'Signal 7', 'Signal 8', 'Signal 9', 'Signal 10']
+        widths = [1, 1, 1, 1, 1,
+            1, 1, 1, 1, 1]
+        colors = ['blue', 'red', 'green', 'black', 'cyan',
+            'magenta', 'yellow', 'dark red', 'dark green', 'dark blue']
+        alphas = [1.0, 1.0, 1.0, 1.0, 1.0,
+            1.0, 1.0, 1.0, 1.0, 1.0]
+        styles = [1, 1, 1, 1, 1,
+            1, 1, 1, 1, 1]
+        markers = [-1, -1, -1, -1, -1,
+            -1, -1, -1, -1, -1]
+
+
+        for i in range(2):
+            if len(labels[i]) == 0:
+                if (i % 2 == 0):
+                    self.qtgui_time_sink_x_0_0_1.set_line_label(i, "Re{{Data {0}}}".format(i/2))
+                else:
+                    self.qtgui_time_sink_x_0_0_1.set_line_label(i, "Im{{Data {0}}}".format(i/2))
+            else:
+                self.qtgui_time_sink_x_0_0_1.set_line_label(i, labels[i])
+            self.qtgui_time_sink_x_0_0_1.set_line_width(i, widths[i])
+            self.qtgui_time_sink_x_0_0_1.set_line_color(i, colors[i])
+            self.qtgui_time_sink_x_0_0_1.set_line_style(i, styles[i])
+            self.qtgui_time_sink_x_0_0_1.set_line_marker(i, markers[i])
+            self.qtgui_time_sink_x_0_0_1.set_line_alpha(i, alphas[i])
+
+        self._qtgui_time_sink_x_0_0_1_win = sip.wrapinstance(self.qtgui_time_sink_x_0_0_1.qwidget(), Qt.QWidget)
+        self.top_layout.addWidget(self._qtgui_time_sink_x_0_0_1_win)
+        self.qtgui_time_sink_x_0_0_0 = qtgui.time_sink_c(
+            1024, #size
+            channel_samp_rate, #samp_rate
+            "disturb2", #name
+            1, #number of inputs
+            None # parent
+        )
+        self.qtgui_time_sink_x_0_0_0.set_update_time(0.10)
+        self.qtgui_time_sink_x_0_0_0.set_y_axis(-1, 1)
+
+        self.qtgui_time_sink_x_0_0_0.set_y_label('Amplitude', "")
+
+        self.qtgui_time_sink_x_0_0_0.enable_tags(True)
+        self.qtgui_time_sink_x_0_0_0.set_trigger_mode(qtgui.TRIG_MODE_FREE, qtgui.TRIG_SLOPE_POS, 0.0, 0, 0, "")
+        self.qtgui_time_sink_x_0_0_0.enable_autoscale(False)
+        self.qtgui_time_sink_x_0_0_0.enable_grid(False)
+        self.qtgui_time_sink_x_0_0_0.enable_axis_labels(True)
+        self.qtgui_time_sink_x_0_0_0.enable_control_panel(False)
+        self.qtgui_time_sink_x_0_0_0.enable_stem_plot(False)
+
+
+        labels = ['Signal 1', 'Signal 2', 'Signal 3', 'Signal 4', 'Signal 5',
+            'Signal 6', 'Signal 7', 'Signal 8', 'Signal 9', 'Signal 10']
+        widths = [1, 1, 1, 1, 1,
+            1, 1, 1, 1, 1]
+        colors = ['blue', 'red', 'green', 'black', 'cyan',
+            'magenta', 'yellow', 'dark red', 'dark green', 'dark blue']
+        alphas = [1.0, 1.0, 1.0, 1.0, 1.0,
+            1.0, 1.0, 1.0, 1.0, 1.0]
+        styles = [1, 1, 1, 1, 1,
+            1, 1, 1, 1, 1]
+        markers = [-1, -1, -1, -1, -1,
+            -1, -1, -1, -1, -1]
+
+
+        for i in range(2):
+            if len(labels[i]) == 0:
+                if (i % 2 == 0):
+                    self.qtgui_time_sink_x_0_0_0.set_line_label(i, "Re{{Data {0}}}".format(i/2))
+                else:
+                    self.qtgui_time_sink_x_0_0_0.set_line_label(i, "Im{{Data {0}}}".format(i/2))
+            else:
+                self.qtgui_time_sink_x_0_0_0.set_line_label(i, labels[i])
+            self.qtgui_time_sink_x_0_0_0.set_line_width(i, widths[i])
+            self.qtgui_time_sink_x_0_0_0.set_line_color(i, colors[i])
+            self.qtgui_time_sink_x_0_0_0.set_line_style(i, styles[i])
+            self.qtgui_time_sink_x_0_0_0.set_line_marker(i, markers[i])
+            self.qtgui_time_sink_x_0_0_0.set_line_alpha(i, alphas[i])
+
+        self._qtgui_time_sink_x_0_0_0_win = sip.wrapinstance(self.qtgui_time_sink_x_0_0_0.qwidget(), Qt.QWidget)
+        self.top_layout.addWidget(self._qtgui_time_sink_x_0_0_0_win)
+        self.qtgui_time_sink_x_0_0 = qtgui.time_sink_c(
+            1024, #size
+            channel_samp_rate, #samp_rate
+            "disturb1", #name
+            1, #number of inputs
+            None # parent
+        )
+        self.qtgui_time_sink_x_0_0.set_update_time(0.10)
+        self.qtgui_time_sink_x_0_0.set_y_axis(-1, 1)
+
+        self.qtgui_time_sink_x_0_0.set_y_label('Amplitude', "")
+
+        self.qtgui_time_sink_x_0_0.enable_tags(True)
+        self.qtgui_time_sink_x_0_0.set_trigger_mode(qtgui.TRIG_MODE_FREE, qtgui.TRIG_SLOPE_POS, 0.0, 0, 0, "")
+        self.qtgui_time_sink_x_0_0.enable_autoscale(False)
+        self.qtgui_time_sink_x_0_0.enable_grid(False)
+        self.qtgui_time_sink_x_0_0.enable_axis_labels(True)
+        self.qtgui_time_sink_x_0_0.enable_control_panel(False)
+        self.qtgui_time_sink_x_0_0.enable_stem_plot(False)
+
+
+        labels = ['Signal 1', 'Signal 2', 'Signal 3', 'Signal 4', 'Signal 5',
+            'Signal 6', 'Signal 7', 'Signal 8', 'Signal 9', 'Signal 10']
+        widths = [1, 1, 1, 1, 1,
+            1, 1, 1, 1, 1]
+        colors = ['blue', 'red', 'green', 'black', 'cyan',
+            'magenta', 'yellow', 'dark red', 'dark green', 'dark blue']
+        alphas = [1.0, 1.0, 1.0, 1.0, 1.0,
+            1.0, 1.0, 1.0, 1.0, 1.0]
+        styles = [1, 1, 1, 1, 1,
+            1, 1, 1, 1, 1]
+        markers = [-1, -1, -1, -1, -1,
+            -1, -1, -1, -1, -1]
+
+
+        for i in range(2):
+            if len(labels[i]) == 0:
+                if (i % 2 == 0):
+                    self.qtgui_time_sink_x_0_0.set_line_label(i, "Re{{Data {0}}}".format(i/2))
+                else:
+                    self.qtgui_time_sink_x_0_0.set_line_label(i, "Im{{Data {0}}}".format(i/2))
+            else:
+                self.qtgui_time_sink_x_0_0.set_line_label(i, labels[i])
+            self.qtgui_time_sink_x_0_0.set_line_width(i, widths[i])
+            self.qtgui_time_sink_x_0_0.set_line_color(i, colors[i])
+            self.qtgui_time_sink_x_0_0.set_line_style(i, styles[i])
+            self.qtgui_time_sink_x_0_0.set_line_marker(i, markers[i])
+            self.qtgui_time_sink_x_0_0.set_line_alpha(i, alphas[i])
+
+        self._qtgui_time_sink_x_0_0_win = sip.wrapinstance(self.qtgui_time_sink_x_0_0.qwidget(), Qt.QWidget)
+        self.top_layout.addWidget(self._qtgui_time_sink_x_0_0_win)
         self.qtgui_time_sink_x_0 = qtgui.time_sink_c(
             1024, #size
-            samp_rate, #samp_rate
-            "", #name
+            channel_samp_rate, #samp_rate
+            "information", #name
             1, #number of inputs
             None # parent
         )
@@ -179,7 +319,7 @@ class radio(gr.top_block, Qt.QWidget):
         self.iio_fmcomms2_source_0.set_quadrature(True)
         self.iio_fmcomms2_source_0.set_rfdc(False)
         self.iio_fmcomms2_source_0.set_bbdc(True)
-        self.iio_fmcomms2_source_0.set_filter_params('Design', '', 0.95e6, 1.10e6)
+        self.iio_fmcomms2_source_0.set_filter_params('Design', '', 0.90e6, 0.98e6)
         self.freq_xlating_fir_filter_jam3 = filter.freq_xlating_fir_filter_ccf(xlate_decim, firdes.low_pass(1, samp_rate, jam3_cutoff, channel_transition, window.WIN_HAMMING, 6.76), jam3_offset, samp_rate)
         self.freq_xlating_fir_filter_jam2 = filter.freq_xlating_fir_filter_ccf(xlate_decim, firdes.low_pass(1, samp_rate, jam2_cutoff, channel_transition, window.WIN_HAMMING, 6.76), jam2_offset, samp_rate)
         self.freq_xlating_fir_filter_jam1 = filter.freq_xlating_fir_filter_ccf(xlate_decim, firdes.low_pass(1, samp_rate, jam1_cutoff, channel_transition, window.WIN_HAMMING, 6.76), jam1_offset, samp_rate)
@@ -256,37 +396,43 @@ class radio(gr.top_block, Qt.QWidget):
         self.connect((self.freq_xlating_fir_filter_info, 0), (self.digital_gfsk_demod_info, 0))
         self.connect((self.freq_xlating_fir_filter_info, 0), (self.qtgui_time_sink_x_0, 0))
         self.connect((self.freq_xlating_fir_filter_jam1, 0), (self.digital_gfsk_demod_jam1, 0))
+        self.connect((self.freq_xlating_fir_filter_jam1, 0), (self.qtgui_time_sink_x_0_0, 0))
         self.connect((self.freq_xlating_fir_filter_jam2, 0), (self.digital_gfsk_demod_jam2, 0))
+        self.connect((self.freq_xlating_fir_filter_jam2, 0), (self.qtgui_time_sink_x_0_0_0, 0))
         self.connect((self.freq_xlating_fir_filter_jam3, 0), (self.digital_gfsk_demod_jam3, 0))
+        self.connect((self.freq_xlating_fir_filter_jam3, 0), (self.qtgui_time_sink_x_0_0_1, 0))
         self.connect((self.iio_fmcomms2_source_0, 0), (self.freq_xlating_fir_filter_info, 0))
         self.connect((self.iio_fmcomms2_source_0, 1), (self.freq_xlating_fir_filter_jam1, 0))
         self.connect((self.iio_fmcomms2_source_0, 1), (self.freq_xlating_fir_filter_jam2, 0))
         self.connect((self.iio_fmcomms2_source_0, 1), (self.freq_xlating_fir_filter_jam3, 0))
 
 
-
-        # IQ raw recording (set RECORD_IQ=1 to enable)
-        if os.environ.get("RECORD_IQ", "0") == "1":
-            import datetime
-            iq_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "bags")
-            os.makedirs(iq_dir, exist_ok=True)
-            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            iq_path = os.path.join(iq_dir, f"iq_raw_{ts}.cf32")
-            self.iq_file_sink = blocks.file_sink(gr.sizeof_gr_complex, iq_path, False)
-            self.iq_file_sink.set_unbuffered(False)
-            self.connect((self.iio_fmcomms2_source_0, 0), (self.iq_file_sink, 0))
-            self.iq_file_sink_1 = blocks.file_sink(gr.sizeof_gr_complex, iq_path.replace('.cf32', '_1.cf32'), False)
-            self.iq_file_sink_1.set_unbuffered(False)
-            self.connect((self.iio_fmcomms2_source_0, 1), (self.iq_file_sink_1, 0))
-            print(f"IQ recording: {iq_path} AND ..._1.cf32 (complex64, {int(self.samp_rate/1e3)}kHz)")
-
     def closeEvent(self, event):
-        self.settings = Qt.QSettings("GNU Radio", "radio")
+        self.settings = Qt.QSettings("gnuradio/flowgraphs", "radio")
         self.settings.setValue("geometry", self.saveGeometry())
         self.stop()
         self.wait()
 
         event.accept()
+
+    def get_xlate_decim(self):
+        return self.xlate_decim
+
+    def set_xlate_decim(self, xlate_decim):
+        self.xlate_decim = xlate_decim
+        self.set_channel_samp_rate(self.samp_rate / self.xlate_decim)
+
+    def get_samp_rate(self):
+        return self.samp_rate
+
+    def set_samp_rate(self, samp_rate):
+        self.samp_rate = samp_rate
+        self.set_channel_samp_rate(self.samp_rate / self.xlate_decim)
+        self.freq_xlating_fir_filter_info.set_taps(firdes.low_pass(1, self.samp_rate, self.info_cutoff, self.channel_transition, window.WIN_HAMMING, 6.76))
+        self.freq_xlating_fir_filter_jam1.set_taps(firdes.low_pass(1, self.samp_rate, self.jam1_cutoff, self.channel_transition, window.WIN_HAMMING, 6.76))
+        self.freq_xlating_fir_filter_jam2.set_taps(firdes.low_pass(1, self.samp_rate, self.jam2_cutoff, self.channel_transition, window.WIN_HAMMING, 6.76))
+        self.freq_xlating_fir_filter_jam3.set_taps(firdes.low_pass(1, self.samp_rate, self.jam3_cutoff, self.channel_transition, window.WIN_HAMMING, 6.76))
+        self.iio_fmcomms2_source_0.set_samplerate(int(self.samp_rate))
 
     def get_rx_center_freq(self):
         return self.rx_center_freq
@@ -326,24 +472,6 @@ class radio(gr.top_block, Qt.QWidget):
     def set_info_freq(self, info_freq):
         self.info_freq = info_freq
         self.set_info_offset(self.info_freq - self.rx_center_freq)
-
-    def get_xlate_decim(self):
-        return self.xlate_decim
-
-    def set_xlate_decim(self, xlate_decim):
-        self.xlate_decim = xlate_decim
-
-    def get_samp_rate(self):
-        return self.samp_rate
-
-    def set_samp_rate(self, samp_rate):
-        self.samp_rate = samp_rate
-        self.freq_xlating_fir_filter_info.set_taps(firdes.low_pass(1, self.samp_rate, self.info_cutoff, self.channel_transition, window.WIN_HAMMING, 6.76))
-        self.freq_xlating_fir_filter_jam1.set_taps(firdes.low_pass(1, self.samp_rate, self.jam1_cutoff, self.channel_transition, window.WIN_HAMMING, 6.76))
-        self.freq_xlating_fir_filter_jam2.set_taps(firdes.low_pass(1, self.samp_rate, self.jam2_cutoff, self.channel_transition, window.WIN_HAMMING, 6.76))
-        self.freq_xlating_fir_filter_jam3.set_taps(firdes.low_pass(1, self.samp_rate, self.jam3_cutoff, self.channel_transition, window.WIN_HAMMING, 6.76))
-        self.iio_fmcomms2_source_0.set_samplerate(int(self.samp_rate))
-        self.qtgui_time_sink_x_0.set_samp_rate(self.samp_rate)
 
     def get_rx_rf_bandwidth(self):
         return self.rx_rf_bandwidth
@@ -466,20 +594,29 @@ class radio(gr.top_block, Qt.QWidget):
 
     def set_channel_samp_rate(self, channel_samp_rate):
         self.channel_samp_rate = channel_samp_rate
+        self.qtgui_time_sink_x_0.set_samp_rate(self.channel_samp_rate)
+        self.qtgui_time_sink_x_0_0.set_samp_rate(self.channel_samp_rate)
+        self.qtgui_time_sink_x_0_0_0.set_samp_rate(self.channel_samp_rate)
+        self.qtgui_time_sink_x_0_0_1.set_samp_rate(self.channel_samp_rate)
 
 
 
 
 def main(top_block_cls=radio, options=None):
 
-    if StrictVersion("4.5.0") <= StrictVersion(Qt.qVersion()) < StrictVersion("5.0.0"):
-        style = gr.prefs().get_string('qtgui', 'style', 'raster')
-        Qt.QApplication.setGraphicsSystem(style)
     qapp = Qt.QApplication(sys.argv)
 
     tb = top_block_cls()
 
     tb.start()
+    tb.flowgraph_started.set()
+    print(
+        "RX running: "
+        f"center={tb.rx_center_freq/1e6:.3f}MHz samp_rate={tb.samp_rate/1e6:.3f}MS/s "
+        f"channel_rate={tb.channel_samp_rate/1e6:.3f}MS/s "
+        f"RX1=info RX2=jam jam3={tb.jam3_freq/1e6:.3f}MHz "
+        f"jam_udp=55560 jam_gain={tb.rx_jam_gain}"
+    )
 
     tb.show()
 

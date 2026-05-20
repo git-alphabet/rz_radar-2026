@@ -1,3 +1,10 @@
+"""GNU Radio embedded block for recovering complete official air frames.
+
+radio.py imports this after GFSK demodulation and access-code tagging. It checks
+Access Code/Header alignment and outputs one 27-byte packet as either 216 bits
+or 27 packed bytes.
+"""
+
 import numpy as np
 from gnuradio import gr
 import pmt
