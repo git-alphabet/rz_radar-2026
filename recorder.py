@@ -51,11 +51,16 @@ class AsyncRecorder:
         self._count = 0
         self._queue: queue.Queue = queue.Queue()
 
-        # Video writer
+        # Video writer (camera)
         self._video_path = filepath.replace(".jsonl", ".mp4")
         self._video_writer: Optional[cv2.VideoWriter] = None
         self._video_fps = 30.0
         self._frame_queue: queue.Queue = queue.Queue(maxsize=300)
+
+        # Video writer (map UI)
+        self._map_video_path = filepath.replace(".jsonl", "_map.mp4")
+        self._map_video_writer: Optional[cv2.VideoWriter] = None
+        self._map_frame_queue: queue.Queue = queue.Queue(maxsize=300)
 
     def start(self):
         """Start recording."""
@@ -80,6 +85,9 @@ class AsyncRecorder:
         if self._video_writer:
             self._video_writer.release()
             self._video_writer = None
+        if self._map_video_writer:
+            self._map_video_writer.release()
+            self._map_video_writer = None
 
     def record(self, event_type: str, data: Any):
         """Non-blocking enqueue for structured events."""
@@ -110,6 +118,22 @@ class AsyncRecorder:
         except queue.Full:
             pass  # drop frame to avoid blocking main thread
 
+    def record_map_frame(self, frame: np.ndarray):
+        """Non-blocking enqueue for map UI frame."""
+        if frame is None:
+            return
+        if self._map_video_writer is None:
+            h, w = frame.shape[:2]
+            fourcc = cv2.VideoWriter_fourcc(*"avc1")
+            self._map_video_writer = cv2.VideoWriter(
+                self._map_video_path, fourcc, self._video_fps, (w, h)
+            )
+            print(f"Map recording: {self._map_video_path} ({w}x{h}@{self._video_fps}fps)")
+        try:
+            self._map_frame_queue.put_nowait((time.time(), frame))
+        except queue.Full:
+            pass
+
     def _writer_loop(self):
         """Background thread: write queued data to file."""
         while self._running:
@@ -138,6 +162,13 @@ class AsyncRecorder:
                 _, frame = self._frame_queue.get_nowait()
                 if self._video_writer:
                     self._video_writer.write(frame)
+            except queue.Empty:
+                break
+        while True:
+            try:
+                _, frame = self._map_frame_queue.get_nowait()
+                if self._map_video_writer:
+                    self._map_video_writer.write(frame)
             except queue.Empty:
                 break
 
