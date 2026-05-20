@@ -176,6 +176,8 @@ last_dart_launch_cmd_time = 0
 
 pending_double_vulnerability = False
 pending_double_vulnerability_reason = ""
+last_double_vulnerability_reason = ""
+last_double_vulnerability_flag = 0
 
 alert_config = config.get('alert', {})
 alert_enabled = bool(alert_config.get('enabled', False))
@@ -600,6 +602,8 @@ def ser_send():
     global last_dart_launch_cmd_time
     global pending_double_vulnerability
     global pending_double_vulnerability_reason
+    global last_double_vulnerability_reason
+    global last_double_vulnerability_flag
     # 单点预测时间
     guess_time = {
         'B1': 0,
@@ -719,6 +723,8 @@ def ser_send():
         packet, seq = build_send_packet(data, seq, [0x03, 0x01])
         ser1.write(packet)
         print(f"双倍易伤请求: {reason}, flag={chances_flag}")
+        last_double_vulnerability_reason = reason
+        last_double_vulnerability_flag = chances_flag
         _rec = get_recorder()
         if _rec:
             _rec.record("double_vuln", {"reason": reason, "flag": chances_flag})
@@ -956,6 +962,8 @@ def ser_receive():
     global dart_hit_count
     global dart_selected_target
     global dart_latest_launch_cmd_time
+    global last_double_vulnerability_reason
+    global last_double_vulnerability_flag
     progress_cmd_id = [0x02, 0x0C]  # 雷达标记进度
     vulnerability_cmd_id = [0x02, 0x0E]  # 雷达信息 (双倍易伤/加密等级)
     target_cmd_id = [0x01, 0x05]  # 飞镖目标
@@ -1028,8 +1036,14 @@ def ser_receive():
                 if vulnerability_result is not None:
                     received_cmd_id2, received_data2, received_seq2 = vulnerability_result
                     received_data2 = list(received_data2)[0]
+                    prev_opponent_double_vulnerability = opponent_double_vulnerability
                     double_vulnerability_chance, opponent_double_vulnerability, encryption_level, key_modifiable = Radar_decision(received_data2)
                     print(f"0x020E recv: raw=0x{received_data2:02X}, chances={double_vulnerability_chance}, opponent_dv={opponent_double_vulnerability}, enc={encryption_level}, key_mod={key_modifiable}")
+                    if prev_opponent_double_vulnerability != opponent_double_vulnerability and opponent_double_vulnerability == 1:
+                        print("双倍易伤生效")
+                        _rec = get_recorder()
+                        if _rec:
+                            _rec.record("double_vuln_active", {"reason": last_double_vulnerability_reason, "flag": last_double_vulnerability_flag})
                 if target_result is not None:
                     received_cmd_id3, received_data3, received_seq3 = target_result
                     # dart_info_t: byte0=dart_remaining_time, byte1-2=dart_info (uint16)
