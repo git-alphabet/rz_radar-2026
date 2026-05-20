@@ -18,9 +18,11 @@ from __future__ import annotations
 
 import os
 import struct
+import sys
 from dataclasses import dataclass
 from typing import Iterable
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from RM_serial_py.ser_api import Get_CRC8_Check_Sum, Get_CRC16_Check_Sum
 
 INFO_ACCESS_CODE = bytes.fromhex("2F6F4C74B914492E")
