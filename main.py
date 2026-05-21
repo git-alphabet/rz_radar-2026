@@ -1124,7 +1124,8 @@ else:
 
 
 # 环境不兼容，该部分单独一个进程启动 GNU Radio
-if config['global'].get('use_radio_gr', False):
+# 当由 run_with_radio.sh 启动时，宿主机已启动 GNU Radio，容器内跳过
+if config['global'].get('use_radio_gr', False) and not os.environ.get('SKIP_RADIO_GR'):
     try:
         gr_process = subprocess.Popen(["python3", "radar_field_blue_linux/radio.py"])
         print("已启动 GNU Radio 接收进程")
