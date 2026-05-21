@@ -153,3 +153,4 @@ docker/*.sh
 
 .claude/
 bags/
+radar_replay_test_blue/
