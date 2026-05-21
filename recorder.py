@@ -42,7 +42,7 @@ import numpy as np
 class AsyncRecorder:
     """Async recorder with queue + background thread."""
 
-    def __init__(self, filepath: str, flush_interval: float = 1.0):
+    def __init__(self, filepath: str, flush_interval: float = 1.0, skip_jsonl: bool = False):
         self._filepath = filepath
         self._flush_interval = flush_interval
         self._running = False
@@ -50,6 +50,7 @@ class AsyncRecorder:
         self._file = None
         self._count = 0
         self._queue: queue.Queue = queue.Queue()
+        self._skip_jsonl = skip_jsonl
 
         # Video writer (camera)
         self._video_path = filepath.replace(".jsonl", ".mp4")
@@ -65,7 +66,8 @@ class AsyncRecorder:
     def start(self):
         """Start recording."""
         os.makedirs(os.path.dirname(self._filepath) or ".", exist_ok=True)
-        self._file = open(self._filepath, "a", encoding="utf-8")
+        if not self._skip_jsonl:
+            self._file = open(self._filepath, "a", encoding="utf-8")
         self._running = True
         self._thread = threading.Thread(target=self._writer_loop, daemon=True)
         self._thread.start()
@@ -247,16 +249,17 @@ class RecordingPlayer:
 recorder: Optional[AsyncRecorder] = None
 
 
-def init_recorder(filepath: str) -> AsyncRecorder:
+def init_recorder(filepath: str, skip_jsonl: bool = False) -> AsyncRecorder:
     """Initialize global recorder.
 
     Args:
         filepath: Path without extension, e.g. "logs/recording_20260517".
                   Will create .jsonl (events) + .mp4 (video).
+        skip_jsonl: If True, skip jsonl file creation (mp4 only).
     """
     global recorder
     jsonl_path = filepath if filepath.endswith(".jsonl") else filepath + ".jsonl"
-    recorder = AsyncRecorder(jsonl_path)
+    recorder = AsyncRecorder(jsonl_path, skip_jsonl=skip_jsonl)
     recorder.start()
     return recorder
 
