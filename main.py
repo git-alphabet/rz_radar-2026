@@ -45,9 +45,11 @@ class Tee:
             s.flush()
 
 import os
+os.environ['TZ'] = 'Asia/Shanghai'
+time.tzset()
 _log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
 os.makedirs(_log_dir, exist_ok=True)
-_log_ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+_log_ts = datetime.datetime.now().strftime("%Y%m%d_%H%M")
 _log_path = os.path.join(_log_dir, f"main_{_log_ts}.log")
 _log_file = open(_log_path, "w", encoding="utf-8")
 sys.stdout = Tee(sys.__stdout__, _log_file)
@@ -59,10 +61,12 @@ with open("config.yaml", "r", encoding="utf-8") as f:  # 指定 UTF-8 编码
 
 # 初始化异步录制器
 if config['global'].get('enable_recording', False):
-    _ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    init_recorder(f"bags/recording_{_ts}")
+    _ts = datetime.datetime.now().strftime("%Y%m%d_%H%M")
+    _skip_jsonl = not config['global'].get('record_jsonl', True)
+    init_recorder(f"bags/recording_{_ts}", skip_jsonl=_skip_jsonl)
     atexit.register(lambda: get_recorder().stop() if get_recorder() else None)
-    print(f"Recording enabled: bags/recording_{_ts} (.jsonl + .mp4)")
+    _mode = "mp4 only" if _skip_jsonl else ".jsonl + .mp4"
+    print(f"Recording enabled: bags/recording_{_ts} ({_mode})")
 else:
     print("Recording disabled")
 
@@ -793,6 +797,7 @@ def ser_send():
             _rec = get_recorder()
             if _rec:
                 _rec.record("send_map", {k: list(v) for k, v in send_map.items()})
+            print(f"[send_map] { {k: list(v) for k, v in send_map.items()} }")
 
             time.sleep(0.2)
             # 基地掉血且敌方地面兵种接近时告警哨兵
@@ -1254,6 +1259,9 @@ while True:
     if _rec:
         _rec.record("vision", {k: list(v) for k, v in all_filter_data.items() if v})
         _rec.record_frame(img0)
+    _vision_log = {k: list(v) for k, v in all_filter_data.items() if v}
+    if _vision_log:
+        print(f"[vision] {_vision_log}")
 
     # 解析无线电敌方数据
     radio_data = {}

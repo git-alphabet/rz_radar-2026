@@ -7,21 +7,8 @@ cd "$ROOT_DIR"
 LOG_DIR="${LOG_DIR:-$ROOT_DIR/logs}"
 mkdir -p "$LOG_DIR"
 
-ENABLE_STREAM=false
-
-for arg in "$@"; do
-	case "$arg" in
-		--stream)
-			ENABLE_STREAM=false
-			;;
-		*)
-			;;
-	esac
-done
-
-ts=$(date +"%Y%m%d_%H%M%S")
+ts=$(TZ=Asia/Shanghai date +"%Y%m%d_%H%M")
 RADIO_LOG="$LOG_DIR/radio_$ts.log"
-STREAM_LOG="$LOG_DIR/stream_$ts.log"
 MAIN_LOG="$LOG_DIR/main_$ts.log"
 
 # Read record_iq from config.yaml
@@ -29,52 +16,66 @@ _record_iq=$(python3 -c "import yaml; print(yaml.safe_load(open('config.yaml'))[
 export RECORD_IQ=$([ "$_record_iq" = "True" ] && echo "1" || echo "0")
 
 echo "Radio log: $RADIO_LOG"
-if $ENABLE_STREAM; then
-	echo "Stream log: $STREAM_LOG"
-else
-	echo "Stream log: disabled"
-fi
 echo "Main log: $MAIN_LOG"
 
 RADIO_PID=""
-STREAM_PID=""
+PARSER_PID=""
 
-python3 radio_py/radio.py >"$RADIO_LOG" 2>&1 &
+python3 radar_field_blue_linux/radio.py >"$RADIO_LOG" 2>&1 &
 RADIO_PID=$!
+sleep 1
 
-if $ENABLE_STREAM; then
-	python3 radio_py/data_stream.py >"$STREAM_LOG" 2>&1 &
-	STREAM_PID=$!
-fi
+PARSER_LOG="$LOG_DIR/field_parse_$ts.log"
+python3 radar_field_blue_linux/field_parse.py >"$PARSER_LOG" 2>&1 &
+PARSER_PID=$!
+echo "Field parse log: $PARSER_LOG"
+
+all_local_dead() {
+	for pid in "$PARSER_PID" "$RADIO_PID"; do
+		if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+			return 1
+		fi
+	done
+	return 0
+}
 
 cleanup() {
 	echo -e "\nShutting down all started processes..."
-	container_id=$(docker compose -f docker/compose.dev.yml ps -q radar 2>/dev/null || true)
-	if [[ -n "$container_id" ]]; then
-		docker compose -f docker/compose.dev.yml exec -T radar bash -lc "pkill -2 -f 'python3 main.py' || true" >/dev/null 2>&1 || true
-		for i in $(seq 1 10); do
-			docker compose -f docker/compose.dev.yml exec -T radar bash -lc "pgrep -f 'python3 main.py' >/dev/null 2>&1" || break
-			sleep 1
-		done
-		docker compose -f docker/compose.dev.yml exec -T radar bash -lc "pkill -9 -f 'python3 main.py' || true" >/dev/null 2>&1 || true
-	fi
-	for pid in "$STREAM_PID" "$RADIO_PID"; do
+
+	# Send SIGTERM to all local processes at once
+	for pid in "$PARSER_PID" "$RADIO_PID"; do
 		if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
 			kill "$pid" 2>/dev/null || true
 		fi
 	done
-	for pid in "$STREAM_PID" "$RADIO_PID"; do
-		if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
-			for i in $(seq 1 10); do
-				kill -0 "$pid" 2>/dev/null || break
-				sleep 1
+
+	# Graceful stop main.py in container (SIGTERM first, then SIGKILL)
+	container_id=$(docker compose -f docker/compose.dev.yml ps -q radar 2>/dev/null || true)
+	if [[ -n "$container_id" ]]; then
+		(docker compose -f docker/compose.dev.yml exec -T radar bash -lc "
+			pkill -2 -f 'python3 main.py' || true
+			for i in \$(seq 1 10); do
+				pgrep -f 'python3 main.py' >/dev/null 2>&1 || exit 0
+				sleep 0.1
 			done
+			pkill -9 -f 'python3 main.py' || true
+		" >/dev/null 2>&1 || true) &
+	fi
+
+	# Poll until all local processes exit, up to 3 seconds
+	for i in $(seq 1 30); do
+		all_local_dead && break
+		sleep 0.1
+	done
+
+	# Force kill any stragglers
+	for pid in "$PARSER_PID" "$RADIO_PID"; do
+		if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
 			kill -9 "$pid" 2>/dev/null || true
 		fi
 	done
-	
-	# Optional: if you also want to stop the container, uncomment the next line
-	# docker compose -f docker/compose.dev.yml stop radar 2>/dev/null || true
+
+	wait
 }
 
 trap cleanup EXIT INT TERM
@@ -84,5 +85,6 @@ if [[ -z "$container_id" ]]; then
 	docker compose -f docker/compose.dev.yml up -d radar
 fi
 
-set -o pipefail
-docker compose -f docker/compose.dev.yml exec -T radar python3 main.py | tee -a "$MAIN_LOG"
+# SKIP_RADIO_GR=1: radio runs on host via radar_field_blue_linux/radio.py,
+# skip the radio thread inside the container to avoid conflicts.
+docker compose -f docker/compose.dev.yml exec -T radar bash -lc "SKIP_RADIO_GR=1 python3 main.py" | tee -a "$MAIN_LOG"

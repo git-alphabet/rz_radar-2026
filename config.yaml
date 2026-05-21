@@ -1,5 +1,5 @@
 global:
-  state: 'R'  # 己方队伍颜色 R/B
+  state: 'B'  # 己方队伍颜色 R/B
   camera_mode: 'hik'  # 'test':测试模式,'hik':海康相机,'video':USB相机（videocapture）
   use_serial: True  # 串口启用开关  保证了无串口时能正常调试，虽然没什么影响（有try）
   use_radio: True  # 无线电启用开关  保证了无无线电时能正常调试
@@ -8,7 +8,8 @@ global:
   map_size: [2800, 1500]  # 战场地图尺寸
   use_official_enemy_pos: True  # 是否优先使用无线链路敌方位置数据 (0x0A01) 代替雷达识别
   official_enemy_pos_timeout: 2.0  # 无线链路敌方位置数据超时时间 (秒)
-  enable_recording: True  # 是否录制识别结果、发送数据到JSONL文件
+  enable_recording: True  # 是否录制视频(mp4)
+  record_jsonl: False  # 是否录制结构化事件到JSONL文件
   record_iq: True  # 是否录制原始IQ数据 (.cf32, ~8MB/s @ 1MHz)
 
 alert:
