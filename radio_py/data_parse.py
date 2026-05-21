@@ -7,6 +7,7 @@ enemy_password) that main.py imports.
 
 import socket
 import time
+from typing import Optional
 
 from radar_field_blue_linux.radar_protocol import (
     AirPayloadExtractor,
@@ -24,7 +25,7 @@ last_update_time: dict[str, float] = {}             # "R1"-"R7" -> timestamp
 enemy_hp: dict[str, int] = {}                       # "1"-"7" -> HP
 enemy_bullet: dict[str, int] = {}                   # "1","3","4","6","7" -> ammo
 enemy_boosts: dict[str, object] = {}                # "1"-"7" + "sentry_posture"
-enemy_macro_state: int | None = None                # 32-bit bitfield from 0x0A04
+enemy_macro_state: Optional[int] = None              # 32-bit bitfield from 0x0A04
 enemy_password: str = ""                            # last decoded 0x0A06 password
 enemy_password_time: float = 0.0
 
